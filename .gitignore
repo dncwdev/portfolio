@@ -1,0 +1,31 @@
+# Secrets (never commit real env files)
+**/.env
+**/.env.*
+!**/.env.template
+!**/.env.example
+!**/.env.sample
+
+# Local overrides
+**/*.local.*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Common build artifacts
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.cache/
+.pytest_cache/
+.venv/
+venv/
+__pycache__/
+
