@@ -1,0 +1,14 @@
+* text=auto
+
+# Keep Linux-targeted artifacts with LF, even on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+*.png binary
+
