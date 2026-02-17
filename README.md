@@ -35,4 +35,4 @@ AI Infrastructure Engineer specializing in GPU-based LLM platforms, air-gapped/o
 
 ## Contact
 
-- LinkedIn: <add link>
+- LinkedIn: https://www.linkedin.com/in/dev-dncw-5882743a0
