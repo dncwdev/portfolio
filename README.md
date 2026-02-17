@@ -1,4 +1,4 @@
-# Portfolio — AI Infrastructure Engineer
+# Portfolio - AI Infrastructure Engineer
 
 AI Infrastructure Engineer specializing in GPU-based LLM platforms, air-gapped/on-prem architectures, and distributed inference systems.
 
@@ -15,18 +15,22 @@ AI Infrastructure Engineer specializing in GPU-based LLM platforms, air-gapped/o
 | Project | Summary | Tech | Link |
 | --- | --- | --- | --- |
 | Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md) |
+| GPU ML Pipeline (Coming Soon) | Coming soon: GPU-based ML pipeline patterns and operations (sanitized) | NVIDIA GPUs, Kubernetes, MLOps | [README](projects/gpu-ml-pipeline/README.md) |
+| Technical Guide (Coming Soon) | Coming soon: technical notes and operational guides (sanitized) | Linux, Kubernetes, DevOps | [README](projects/technical-guide/README.md) |
+
+_"Coming soon" entries are placeholders; documentation will be added once sanitized._
 
 ## Skills
 
-- **LLM / Inference:** `vLLM` · `Triton` · `Ollama` · `RAG`
-- **Platform / Infra:** `Kubernetes` · `NVIDIA DGX` · `Linux` · `Air-gapped / On-prem`
-- **Observability / Ops:** `Grafana` · `Prometheus` · `Docker/Compose` · `DevOps`
-- **Enterprise:** `Oracle DB` · `WebLogic` · `Access control` · `Regulated-data compliance`
-- **Certifications:** `CKA` · `PMP`
+- **LLM / Inference:** `vLLM` | `Triton` | `Ollama` | `RAG`
+- **Platform / Infra:** `Kubernetes` | `NVIDIA DGX` | `Linux` | `Air-gapped / On-prem`
+- **Observability / Ops:** `Grafana` | `Prometheus` | `Docker/Compose` | `DevOps`
+- **Enterprise:** `Oracle DB` | `WebLogic` | `Access control` | `Regulated-data compliance`
+- **Certifications:** `CKA` | `PMP`
 
 ## Experience
 
-- Public-sector energy enterprise (South Korea) — Section Manager / AI Infrastructure Engineer (May 2005–Present)
+- Public-sector energy enterprise (South Korea) - Section Manager / AI Infrastructure Engineer (May 2005-Present)
   - Air-gapped enterprise LLM platform (Kubernetes, vLLM, Ollama, NVIDIA GPUs)
   - Multi-node DGX operations for distributed inference
   - RAG pipelines + Grafana monitoring + secure model-serving environment
