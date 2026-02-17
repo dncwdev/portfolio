@@ -15,7 +15,7 @@
 ---
 
 ## Architecture
-![Architecture](assets/arch.png)
+_Architecture diagram: coming soon (will be added once the case study is fully sanitized)._
 
 **Key components**
 - Runtime: Docker / Compose (필요 시 Helm/Kubernetes 확장)
@@ -81,4 +81,3 @@ bash projects/container-platform/repro/scripts/smoke_test.sh
 ## Notes on confidentiality
 - 모든 구성/스크린샷은 마스킹(SANITIZED) 처리
 - secrets/tokens/certs are not included (templates only)
-

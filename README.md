@@ -8,6 +8,7 @@ Curated, sanitized case studies and minimal reproductions focused on enterprise 
 | Project | Summary | Tech | Link |
 | --- | --- | --- | --- |
 | Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md) |
+| AI Inference Platform (WIP) | Air-gapped/on-prem multi-model serving with RAG-oriented endpoints (design doc) | Kubernetes, vLLM, Ollama, Open-WebUI | [README](projects/ai-inference-platform/README.md) |
 | GPU ML Pipeline (Coming Soon) | Coming soon: GPU-based ML pipeline patterns and operations (sanitized) | NVIDIA GPUs, Kubernetes, MLOps | [README](projects/gpu-ml-pipeline/README.md) |
 | Technical Guide (Coming Soon) | Coming soon: technical notes and operational guides (sanitized) | Linux, Kubernetes, DevOps | [README](projects/technical-guide/README.md) |
 

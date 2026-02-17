@@ -1,0 +1,103 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36" version="29.4.0">
+  <diagram id="eiYugqq-979Gjra-0lX7" name="페이지-1">
+    <mxGraphModel dx="2066" dy="1103" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="DFJAQS5MVInVmmibLCl5-1" parent="1" style="swimlane;startSize=30;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=3;dashed=1;dashPattern=10 5;fontStyle=1;fontSize=15;fontColor=#7d4f00;swimlaneLine=1;horizontal=1;" value="Air-gapped / On-premises Only" vertex="1">
+          <mxGeometry height="1060" width="1560" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-2" parent="DFJAQS5MVInVmmibLCl5-1" style="shape=mxgraph.cisco.computers_and_peripherals.pc;html=1;pointerEvents=1;dashed=0;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;verticalLabelPosition=bottom;verticalAlign=top;align=center;outlineConnect=0;fontSize=13;" value="&lt;b&gt;Users&lt;br/&gt;(Browser)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="40" width="60" x="757" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-3" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-2" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#6c8ebf;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-14" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="770" y="128" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-4" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;fontStyle=1;fontSize=12;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-6" value="LLM (Qwen3 235B)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="690" y="380" />
+              <mxPoint x="380" y="380" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-5" parent="DFJAQS5MVInVmmibLCl5-1" style="swimlane;startSize=30;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontStyle=1;fontSize=15;fontColor=#1e4d1e;" value="Kubernetes Cluster — GPU (H100 × 12)" vertex="1">
+          <mxGeometry height="640" width="680" x="40" y="403" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-6" parent="DFJAQS5MVInVmmibLCl5-5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;Ollama Server&lt;/b&gt;&lt;br&gt;Qwen3 235B&lt;br&gt;&lt;font color=&quot;#666666&quot;&gt;Ollama API&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#e6a020&quot;&gt;[H100 × 3]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="120" width="560" x="60" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-7" parent="DFJAQS5MVInVmmibLCl5-5" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;vLLM Server&lt;/b&gt;&lt;br&gt;GPT-OSS 120B&lt;br&gt;&lt;font color=&quot;#666666&quot;&gt;OpenAI-compatible API&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#e6a020&quot;&gt;[H100 × 2]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="120" width="560" x="60" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-8" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#82b366;fontStyle=1;fontSize=12;exitX=0.2;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-7" value="LLM (GPT-OSS 120B)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="640" y="350" />
+              <mxPoint x="240" y="350" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-9" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#d6b656;fontStyle=1;fontSize=12;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-16" value="LLM (Gemma3)">
+          <mxGeometry relative="1" x="0.1579" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="890" y="453" />
+              <mxPoint x="990" y="453" />
+            </Array>
+            <mxPoint x="1190" y="303" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-10" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#d6b656;fontStyle=1;fontSize=12;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-17" value="LLM (EXAONE 3.5 32B)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="940" y="370" />
+              <mxPoint x="1140" y="370" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-11" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#9673a6;fontStyle=1;fontSize=12;exitX=0.9;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-18" value="Embedding (BGE-M3)">
+          <mxGeometry relative="1" x="-0.039" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="990" y="310" />
+              <mxPoint x="1290" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-12" edge="1" parent="DFJAQS5MVInVmmibLCl5-1" source="DFJAQS5MVInVmmibLCl5-14" style="edgeStyle=orthogonalEdgeStyle;strokeWidth=2;strokeColor=#9673a6;fontStyle=1;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.25;entryDx=0;entryDy=0;" target="DFJAQS5MVInVmmibLCl5-19" value="Reranker (BGE-v2-m3)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1040" y="240" />
+              <mxPoint x="1470" y="240" />
+              <mxPoint x="1470" y="948" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-13" parent="DFJAQS5MVInVmmibLCl5-1" style="swimlane;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontStyle=1;fontSize=15;fontColor=#003380;" value="Kubernetes Cluster — CPU" vertex="1">
+          <mxGeometry height="200" width="620" x="480" y="128" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-14" parent="DFJAQS5MVInVmmibLCl5-13" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;Open-WebUI&lt;/b&gt;&lt;br/&gt;Unified AI Chat Interface&lt;br/&gt;RAG Pipeline Orchestration" vertex="1">
+          <mxGeometry height="100" width="500" x="60" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-15" parent="DFJAQS5MVInVmmibLCl5-1" style="swimlane;startSize=30;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontStyle=1;fontSize=15;fontColor=#7d4f00;" value="VMware VM Environment" vertex="1">
+          <mxGeometry height="640" width="720" x="780" y="403" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-16" parent="DFJAQS5MVInVmmibLCl5-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;VM: Ollama + Gemma3&lt;/b&gt;&lt;br/&gt;Multimodal LLM&lt;br/&gt;&lt;font color=&quot;#666666&quot;&gt;Ollama API&lt;/font&gt;&lt;br/&gt;&lt;font color=&quot;#2196F3&quot;&gt;[T4 GPU]&lt;/font&gt;" vertex="1">
+          <mxGeometry height="110" width="600" x="60" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-17" parent="DFJAQS5MVInVmmibLCl5-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;VM: Ollama + EXAONE 3.5 32B&lt;/b&gt;&lt;br&gt;Korean-optimized LLM&lt;br&gt;&lt;font color=&quot;#666666&quot;&gt;Ollama API&lt;/font&gt;&lt;br&gt;&lt;span style=&quot;color: rgb(38, 139, 219);&quot;&gt;[T4 GPU]&lt;/span&gt;" vertex="1">
+          <mxGeometry height="110" width="600" x="60" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-18" parent="DFJAQS5MVInVmmibLCl5-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;VM: vLLM + BGE-M3&lt;/b&gt;&lt;br&gt;Embedding Model&lt;br&gt;&lt;font color=&quot;#666666&quot;&gt;OpenAI-compatible API&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#666666&quot;&gt;&lt;span style=&quot;color: rgb(38, 139, 219);&quot;&gt;[T4 GPU]&lt;/span&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="100" width="600" x="60" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="DFJAQS5MVInVmmibLCl5-19" parent="DFJAQS5MVInVmmibLCl5-15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;verticalAlign=middle;align=center;" value="&lt;b&gt;VM: vLLM + BGE-reranker-v2-m3&lt;/b&gt;&lt;br&gt;Reranker Model&lt;br&gt;&lt;font color=&quot;#666666&quot;&gt;OpenAI-compatible API&lt;/font&gt;&lt;div&gt;&lt;font color=&quot;#666666&quot;&gt;&lt;span style=&quot;color: rgb(38, 139, 219);&quot;&gt;[T4 GPU]&lt;/span&gt;&lt;/font&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="100" width="600" x="60" y="520" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
