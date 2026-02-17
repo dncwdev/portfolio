@@ -62,4 +62,5 @@ Work in progress. This folder will be expanded with deployment notes, endpoint c
 
 ## Related Work (TBD)
 
-- Paper: [Title] ([Year]) - [How it informed this design] (link TBD)
+- Presented at [Conference Name] ([Year]) — On-premises LLM serving architecture  
+  _(Slide deck available upon request)_
