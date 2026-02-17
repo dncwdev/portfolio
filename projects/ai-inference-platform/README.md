@@ -27,8 +27,6 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
   - **vLLM + BGE-M3** (embedding model, OpenAI-compatible API)
   - **vLLM + BGE-reranker-v2-m3** (reranker model, OpenAI-compatible API)
 
-> Note: Model names and hardware labels are included as shown in the diagram and may be adjusted in the final, sanitized write-up.
-
 ## Request flows
 
 ### 1) Chat / completion (no RAG)
@@ -62,3 +60,6 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
 
 Work in progress. This folder will be expanded with deployment notes, endpoint conventions, and operational runbooks once sanitized.
 
+## Related Work (TBD)
+
+- Paper: [Title] ([Year]) - [How it informed this design] (link TBD)
