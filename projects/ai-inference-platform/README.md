@@ -58,11 +58,14 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
 
 ## Status
 
-Work in progress. This folder will be expanded with deployment notes, endpoint conventions, and operational runbooks once sanitized.
+This folder will be expanded with deployment notes, endpoint conventions, and operational runbooks once sanitized.
 
 ## Related Work
 
-- Presented at Korean Institute of Industrial Information Systems (KIIS), Fall 2024 — Human error analysis in OPIS data management
+- Presented at Korean Institute of Industrial Information Systems (KIIS), Spring 2025
+  — On-premises LLM deployment in air-gapped environments
   _(Slide deck available upon request)_
-- Presented at Korean Institute of Industrial Information Systems (KIIS), Spring 2025 — On-premises LLM deployment in air-gapped environments
+
+- Presented at Korean Institute of Industrial Information Systems (KIIS), Fall 2024
+  — Human error analysis in OPIS data management
   _(Slide deck available upon request)_
