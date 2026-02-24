@@ -17,10 +17,10 @@
 
 ## Ollama Observations
 
-- TPS는 warm/cold 관계없이 **43.5 tokens/s 수준으로 안정적**
-- Cold start 시 모델 로딩(~20초)이 TTFT를 압도함
-- 운영 환경에서는 `keepalive=-1` 설정으로 모델을 메모리에 상주시켜 warm 상태 유지 필요
-- Warm 상태 기준 TTFT는 프롬프트 처리 시간에 따라 0.3~1.9s 범위
+- TPS remains stable at ~43.5 tokens/s regardless of warm or cold state
+- Cold start is dominated by model loading (~20s), making TTFT impractical without keepalive
+- In production, `keepalive=-1` is recommended to keep the model resident in memory
+- Warm-state TTFT varies between 0.3–1.9s depending on prompt eval time
 
 ## vLLM Observations
 
