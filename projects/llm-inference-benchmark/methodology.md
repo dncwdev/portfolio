@@ -2,24 +2,30 @@
 
 ## Test Conditions
 
-| Parameter            | Value        |
-| -------------------- | ------------ |
-| Model                | GPT-OSS 120B |
-| Input prompt length  | TBD tokens   |
-| Output length        | TBD tokens   |
-| Concurrent requests  | TBD          |
-| Repetitions per test | TBD          |
+| Parameter    | Value                                                                          |
+| ------------ | ------------------------------------------------------------------------------ |
+| Model        | gpt-oss:120b (MXFP4, 65GB)                                                     |
+| Test prompts | "Hello" / "Explain the difference between RAG and fine-tuning in 3 sentences." |
+| Repetitions  | 2-3 runs per condition                                                         |
+| Concurrency  | Single request (sequential)                                                    |
 
 ## Metrics
 
-- **TTFT (Time to First Token)**: measured from request submission to first token received
-- **Throughput**: tokens generated per second (output tokens only)
+- **TTFT (Time to First Token)**: load duration + prompt eval duration
+- **Throughput**: eval rate (tokens/s, output tokens only)
+
+## Warm vs Cold State
+
+- **Warm**: model already loaded in memory (keepalive=-1 or recent prior request)
+- **Cold**: model unloaded via `keep_alive: 0` API call before measurement
 
 ## Tooling
 
-- Measurement method: TBD (e.g., vLLM benchmark script, custom client)
+- Ollama: `ollama run [model] --verbose` (built-in stats output)
+- vLLM: TBD
 
-## Constraints
+## Environment Notes
 
-- H100 environment: air-gapped, production node (shared load may affect results)
-- DGX Spark: single-node, unified memory architecture
+- DGX Spark GB10 unified memory (128GB) — sufficient for 65GB model with headroom
+- H100 x2: air-gapped production node, warm state (vLLM keeps model loaded by default)
+- All tests single-node, single-request baseline (not multi-user load test)
