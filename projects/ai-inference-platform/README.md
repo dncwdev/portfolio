@@ -60,7 +60,9 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
 
 Work in progress. This folder will be expanded with deployment notes, endpoint conventions, and operational runbooks once sanitized.
 
-## Related Work (TBD)
+## Related Work
 
-- Presented at [Conference Name] ([Year]) — On-premises LLM serving architecture  
+- Presented at Korean Institute of Industrial Information Systems (KIIS), Fall 2024 — Human error analysis in OPIS data management
+  _(Slide deck available upon request)_
+- Presented at Korean Institute of Industrial Information Systems (KIIS), Spring 2025 — On-premises LLM deployment in air-gapped environments
   _(Slide deck available upon request)_
