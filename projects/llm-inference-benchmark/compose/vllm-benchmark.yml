@@ -1,0 +1,28 @@
+services:
+  vllm:
+    image: vllm-custom:25.09
+    container_name: custom-vllm-server
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - TIKTOKEN_ENCODINGS_BASE=/opt/tiktoken_encodings
+    volumes:
+      - /home/user/dev-test-workspace/models/gpt-oss-120b:/model
+      - /home/user/dev-test-workspace/models/tiktoken_encodings:/opt/tiktoken_encodings
+    ports:
+      - "58888:8000"
+    ipc: host
+    command: >
+      vllm serve /model
+      --served-model-name gpt-oss-120b
+      --max-model-len 131072
+      --max-num-batched-tokens 16384
+      --max-num-seqs 8
+      --dtype auto
+      --gpu-memory-utilization 0.85
+      --trust-remote-code
+      --tensor-parallel-size 1
+      --async-scheduling
+      --host 0.0.0.0
+      --swap-space 64
+    restart: unless-stopped
