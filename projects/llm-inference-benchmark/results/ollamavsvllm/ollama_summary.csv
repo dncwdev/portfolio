@@ -1,0 +1,4 @@
+concurrency,requests,ttft_mean_sec,ttft_p50_sec,ttft_p95_sec,ttft_p99_sec,tps_mean,total_mean_sec
+1,2,4.96,4.96,7.48,7.7,42.0,23.42
+5,10,98.86,99.12,104.64,104.94,8.47,118.95
+10,20,222.16,221.31,228.85,229.14,4.26,240.64

@@ -17,6 +17,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Notebook checkpoints
+**/.ipynb_checkpoints/
+
 # Common build artifacts
 node_modules/
 dist/
@@ -28,4 +31,3 @@ build/
 .venv/
 venv/
 __pycache__/
-

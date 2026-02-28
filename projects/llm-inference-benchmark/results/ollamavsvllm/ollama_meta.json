@@ -1,0 +1,13 @@
+{
+  "date": "2026-02-28 21:11",
+  "engine": "Ollama",
+  "model": "gpt-oss:120b",
+  "max_new_tokens": 1024,
+  "concurrency_levels": [
+    1,
+    5,
+    10
+  ],
+  "requests_per_user": 3,
+  "timeout": 600
+}
