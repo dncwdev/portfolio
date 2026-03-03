@@ -21,6 +21,8 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
 - **Kubernetes Cluster (GPU: H100 x 12)**
   - **vLLM server** for `GPT-OSS 120B` (OpenAI-compatible API)
   - **Ollama server** for `Qwen3 235B` (Ollama API)
+  - **vLLM server** for `GPT-OSS 120B` => Research AI APP 1 (dedicated instance; serves as inference backend for a separate research application)
+  - **vLLM server** for `GPT-OSS 120B` => Research AI APP 2 (dedicated instance; serves as inference backend for a separate research application)
 - **VMware VM environment (T4 GPU)**
   - **Ollama + Gemma3** (multimodal LLM)
   - **Ollama + EXAONE 3.5 32B** (Korean-optimized LLM)
@@ -49,6 +51,7 @@ This case study focuses on multi-model serving, RAG-oriented endpoints, and GPU 
 - **Interface standardization:** Prefer OpenAI-compatible APIs where possible to simplify client integration; use Ollama where it provides operational convenience.
 - **GPU tiering:** Use H100 cluster capacity for heavy LLM inference and keep T4 VMs for cost-efficient/specialized workloads (embeddings, reranking, smaller LLMs).
 - **Separation of concerns:** Keep UI/orchestration on CPU nodes and isolate inference workloads on dedicated GPU backends.
+- **Dedicated inference for internal consumers:** Research divisions requiring LLM capabilities for their own applications are served through isolated vLLM instances rather than sharing the general-purpose endpoint — ensuring SLA isolation and independent scaling.
 
 ## Security & operations (high level)
 
