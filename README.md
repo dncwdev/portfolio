@@ -5,15 +5,12 @@ Curated, sanitized case studies and minimal reproductions focused on enterprise 
 
 ## Projects
 
-| Project                         | Summary                                                                                | Tech                                 | Link                                                 |
-| ------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------- |
-| AI Inference Platform           | Air-gapped/on-prem multi-model serving with RAG-oriented endpoints (design doc)        | Kubernetes, vLLM, Ollama, Open-WebUI | [README](projects/ai-inference-platform/README.md)   |
-| LLM Inference Benchmark         | GPT-OSS 120B performance comparison across H100 cluster and DGX Spark (vLLM vs Ollama) | vLLM, Ollama, DGX Spark, H100        | [README](projects/llm-inference-benchmark/README.md) |
-| Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction                            | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md)      |
-| GPU ML Pipeline (Coming Soon)   | Coming soon: GPU-based ML pipeline patterns and operations (sanitized)                 | NVIDIA GPUs, Kubernetes, MLOps       | [README](projects/gpu-ml-pipeline/README.md)         |
-| Technical Guide (Coming Soon)   | Coming soon: technical notes and operational guides (sanitized)                        | Linux, Kubernetes, DevOps            | [README](projects/technical-guide/README.md)         |
-
-_"Coming soon" entries are placeholders; documentation will be added once sanitized._
+| Project                         | Summary                                                                                 | Tech                                 | Link                                                       |
+| ------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------- |
+| AI Inference Platform           | Air-gapped/on-prem multi-model serving with RAG-oriented endpoints (design doc)         | Kubernetes, vLLM, Ollama, Open-WebUI | [README](projects/ai-inference-platform/README.md)         |
+| LLM Inference Benchmark         | GPT-OSS 120B performance comparison across H100 cluster and DGX Spark (vLLM vs Ollama) | vLLM, Ollama, DGX Spark, H100        | [README](projects/llm-inference-benchmark/README.md)       |
+| Ray Multi-Node Inference        | Multi-node LLM inference using Ray + vLLM across two DGX Spark systems (GPT-OSS 120B)  | Ray, vLLM, DGX Spark, GB10           | [README](projects/ray-multinode-inference/README.md)       |
+| Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction                             | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md)            |
 
 ## Skills
 

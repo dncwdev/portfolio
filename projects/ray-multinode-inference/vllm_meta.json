@@ -1,0 +1,20 @@
+{
+  "date": "2026-03-21 04:31",
+  "engine": "vLLM",
+  "model": "gpt-oss-120b",
+  "max_new_tokens": 1024,
+  "concurrency_levels": [
+    1,
+    5,
+    10
+  ],
+  "requests_per_user": 3,
+  "timeout": 600,
+  "vllm_config": {
+    "max_num_seqs": 8,
+    "max_num_batched_tokens": 16384,
+    "max_model_len": 131072,
+    "gpu_memory_utilization": 0.85,
+    "async_scheduling": true
+  }
+}
