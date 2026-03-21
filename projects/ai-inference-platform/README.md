@@ -65,10 +65,10 @@ This folder will be expanded with deployment notes, endpoint conventions, and op
 
 ## Related Work
 
-- Presented at Korean Institute of Industrial Information Systems (KIIS), Spring 2025
-  — On-premises LLM deployment in air-gapped environments
+- **Outstanding Paper Award** — KSIIS Spring Conference, 2025
+  "A Case Study on Building an LLM Deployment Environment in a Physically Air-Gapped Network"
   _(Slide deck available upon request)_
 
-- Presented at Korean Institute of Industrial Information Systems (KIIS), Fall 2024
-  — Human error analysis in OPIS data management
+- **Outstanding Paper Award** — KSIIS Fall Conference, 2024
+  "A Study on Nuclear Power Plant Human Error Analysis through Event Characteristic Quantification and Predictive Model Development of OPIS Data"
   _(Slide deck available upon request)_

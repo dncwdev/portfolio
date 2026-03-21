@@ -20,6 +20,19 @@ Curated, sanitized case studies and minimal reproductions focused on enterprise 
 - **Enterprise:** `Oracle DB` | `WebLogic` | `Access control` | `Regulated-data compliance`
 - **Certifications:** `CKA` | `PMP`
 
+## Competitions
+
+| Competition | Result | Summary | Period |
+|---|---|---|---|
+| KRX LLM Competition 2024 | Finalist | Fine-tuning checkpoint comparison via MMLU benchmark for financial domain LLM | Oct–Dec 2024 |
+
+## Publications
+
+| Award | Title | Conference |
+|---|---|---|
+| Outstanding Paper | A Case Study on Building an LLM Deployment Environment in a Physically Air-Gapped Network | KSIIS Spring Conference, 2025 |
+| Outstanding Paper | A Study on Nuclear Power Plant Human Error Analysis through Event Characteristic Quantification and Predictive Model Development of OPIS Data | KSIIS Fall Conference, 2024 |
+
 ## Links
 
 - LinkedIn (full experience): https://www.linkedin.com/in/dev-dncw-5882743a0
