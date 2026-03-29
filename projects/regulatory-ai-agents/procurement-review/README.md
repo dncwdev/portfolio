@@ -36,7 +36,13 @@ This phase implements the baseline RAG flow:
 
 ## Environment Variables
 
-Create a local `.env` file with these values:
+Copy `.env.template` to `.env`, then adjust values if needed:
+
+```powershell
+Copy-Item .env.template .env
+```
+
+Template contents:
 
 ```dotenv
 LLM_BASE_URL=http://192.168.1.149:58888
