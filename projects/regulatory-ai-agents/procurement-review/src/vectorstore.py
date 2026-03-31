@@ -44,10 +44,7 @@ class ProcurementVectorStore:
         self.collection_name = collection_name or self.settings.chroma_collection_name
         self.settings.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(self.settings.chroma_persist_dir))
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        self.collection = self._get_or_create_collection()
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size or self.settings.chunk_size,
             chunk_overlap=chunk_overlap or self.settings.chunk_overlap,
@@ -63,6 +60,10 @@ class ProcurementVectorStore:
     def has_source(self, source: str) -> bool:
         result = self.collection.get(where={"source": source}, limit=1, include=["metadatas"])
         return bool(result.get("ids"))
+
+    def clear_collection(self) -> None:
+        self.client.delete_collection(name=self.collection_name)
+        self.collection = self._get_or_create_collection()
 
     def get_collection_excerpt(self, limit: int = 5, max_chars: int = 4000) -> str:
         if self.collection.count() == 0:
@@ -257,6 +258,12 @@ class ProcurementVectorStore:
             for document in documents
         )
         return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _get_or_create_collection(self):
+        return self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
 
     def _iterate_batches(
         self,
