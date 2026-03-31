@@ -43,6 +43,14 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    items = tuple(item.strip() for item in value.split(",") if item.strip())
+    return items or default
+
+
 def _resolve_path(path_str: str) -> Path:
     candidate = Path(path_str)
     return candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
@@ -59,6 +67,7 @@ class Settings:
     llm_api_base_url: str
     llm_model_name: str
     llm_display_name: str
+    available_models: tuple[str, ...]
     llm_api_key: str
     embedding_base_url: str
     embedding_api_base_url: str
@@ -72,8 +81,12 @@ class Settings:
     reranker_api_key: str
     chroma_persist_dir: Path
     chroma_collection_name: str
+    regulations_collection_name: str
+    regulations_data_dir: Path
     chunk_size: int
     chunk_overlap: int
+    regulations_chunk_size: int
+    regulations_chunk_overlap: int
     retrieval_top_k: int
     rerank_top_k: int
     request_timeout: float
@@ -85,14 +98,19 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     llm_base_url = _require_env("LLM_BASE_URL")
+    llm_model_name = _require_env("LLM_MODEL_NAME")
     embedding_base_url = _require_env("EMBEDDING_BASE_URL")
     reranker_base_url = _require_env("RERANKER_BASE_URL")
+    available_models = _env_csv("AVAILABLE_MODELS", (llm_model_name,))
+    if llm_model_name not in available_models:
+        available_models = (llm_model_name, *available_models)
 
     return Settings(
         llm_base_url=llm_base_url.rstrip("/"),
         llm_api_base_url=_normalize_openai_base_url(llm_base_url),
-        llm_model_name=_require_env("LLM_MODEL_NAME"),
-        llm_display_name=_env_str("LLM_DISPLAY_NAME", _require_env("LLM_MODEL_NAME")),
+        llm_model_name=llm_model_name,
+        llm_display_name=_env_str("LLM_DISPLAY_NAME", llm_model_name),
+        available_models=available_models,
         llm_api_key=_require_env("LLM_API_KEY"),
         embedding_base_url=embedding_base_url.rstrip("/"),
         embedding_api_base_url=_normalize_openai_base_url(embedding_base_url),
@@ -115,8 +133,17 @@ def get_settings() -> Settings:
             "CHROMA_COLLECTION_NAME",
             "procurement_regulations",
         ),
+        regulations_collection_name=_env_str(
+            "REGULATIONS_COLLECTION_NAME",
+            "regulations",
+        ),
+        regulations_data_dir=_resolve_path(
+            _env_str("REGULATIONS_DATA_DIR", "data/regulations")
+        ),
         chunk_size=_env_int("CHUNK_SIZE", 1200),
         chunk_overlap=_env_int("CHUNK_OVERLAP", 200),
+        regulations_chunk_size=_env_int("REGULATIONS_CHUNK_SIZE", 500),
+        regulations_chunk_overlap=_env_int("REGULATIONS_CHUNK_OVERLAP", 50),
         retrieval_top_k=_env_int("RETRIEVAL_TOP_K", 20),
         rerank_top_k=_env_int("RERANK_TOP_K", 5),
         request_timeout=_env_float("REQUEST_TIMEOUT", 60.0),
@@ -126,11 +153,12 @@ def get_settings() -> Settings:
     )
 
 
-@lru_cache(maxsize=1)
-def build_llm() -> ChatOpenAI:
+@lru_cache(maxsize=16)
+def build_llm(model_name: str | None = None) -> ChatOpenAI:
     settings = get_settings()
+    selected_model = model_name or settings.llm_model_name
     return ChatOpenAI(
-        model=settings.llm_model_name,
+        model=selected_model,
         api_key=settings.llm_api_key,
         base_url=settings.llm_api_base_url,
         temperature=settings.llm_temperature,

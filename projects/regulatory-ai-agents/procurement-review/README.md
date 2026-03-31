@@ -1,6 +1,6 @@
 # Procurement Review Agent
 
-Phase 1 implementation of a procurement document review agent built with:
+Procurement document review agent built with:
 
 - LangChain
 - ChromaDB
@@ -32,7 +32,9 @@ This phase implements the baseline RAG flow:
 - `src/rag_pipeline.py`
   - Composes the retrieval, reranking, and answer generation flow with LCEL
 - `app.py`
-  - Streamlit UI for ingestion, querying, and evidence review
+  - Streamlit UI for ingestion, model selection, querying, and evidence review
+- `scripts/ingest_regulations.py`
+  - Pre-embeds regulations into a separate `regulations` ChromaDB collection
 
 ## Environment Variables
 
@@ -48,6 +50,7 @@ Template contents:
 LLM_BASE_URL=http://192.168.1.149:58888
 LLM_MODEL_NAME=gpt-oss-120b
 LLM_DISPLAY_NAME=OPENAI/gpt-oss-120b
+AVAILABLE_MODELS=gpt-oss-120b,Solar-Open-100B,Qwen3.5-35B-A3B,Qwen3.5-9B
 LLM_API_KEY=empty
 
 EMBEDDING_BASE_URL=http://192.168.1.166:58001
@@ -62,14 +65,25 @@ RERANKER_API_KEY=empty
 
 CHROMA_PERSIST_DIR=.chroma
 CHROMA_COLLECTION_NAME=procurement_regulations
+REGULATIONS_COLLECTION_NAME=regulations
+REGULATIONS_DATA_DIR=data/regulations
 CHUNK_SIZE=1200
 CHUNK_OVERLAP=200
+REGULATIONS_CHUNK_SIZE=500
+REGULATIONS_CHUNK_OVERLAP=50
 RETRIEVAL_TOP_K=20
 RERANK_TOP_K=5
 REQUEST_TIMEOUT=60
 LLM_TEMPERATURE=0
 LLM_MAX_TOKENS=2048
 LLM_INCLUDE_REASONING=false
+```
+
+Pre-embed regulations once before starting the app:
+
+```powershell
+.\.venv\Scripts\activate
+python scripts/ingest_regulations.py
 ```
 
 ## Run
