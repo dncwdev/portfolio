@@ -4,3 +4,9 @@ __pycache__/
 data/procurement_docs/**
 !data/procurement_docs/**/
 !data/procurement_docs/**/.gitkeep
+data/evaluation/**
+!data/evaluation/**/
+!data/evaluation/**/.gitkeep
+data/regulations/**
+!data/regulations/**/
+!data/regulations/**/.gitkeep

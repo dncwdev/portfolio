@@ -14,38 +14,79 @@ ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(ENV_PATH)
 
 
-def _require_env(name: str) -> str:
+@lru_cache(maxsize=1)
+def _read_env_file_values() -> dict[str, str]:
+    if not ENV_PATH.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        if "=" not in stripped:
+            continue
+
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        value = raw_value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        if key:
+            values[key] = value
+
+    return values
+
+
+def _env_lookup(name: str) -> str | None:
     value = os.getenv(name)
-    if value is None or not value.strip():
+    if value is not None and value.strip():
+        return value.strip()
+
+    file_value = _read_env_file_values().get(name)
+    if file_value is not None and file_value.strip():
+        return file_value.strip()
+    return None
+
+
+def _require_env(name: str) -> str:
+    value = _env_lookup(name)
+    if value is None:
         raise ValueError(f"Missing required environment variable: {name}")
-    return value.strip()
+    return value
 
 
 def _env_str(name: str, default: str) -> str:
-    value = os.getenv(name)
-    return value.strip() if value and value.strip() else default
+    value = _env_lookup(name)
+    return value if value is not None else default
 
 
 def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return int(value) if value and value.strip() else default
+    value = _env_lookup(name)
+    return int(value) if value is not None else default
 
 
 def _env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    return float(value) if value and value.strip() else default
+    value = _env_lookup(name)
+    return float(value) if value is not None else default
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None or not value.strip():
+    value = _env_lookup(name)
+    if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
-    value = os.getenv(name)
-    if value is None or not value.strip():
+    value = _env_lookup(name)
+    if value is None:
         return default
     items = tuple(item.strip() for item in value.split(",") if item.strip())
     return items or default
@@ -63,11 +104,11 @@ def _normalize_openai_base_url(base_url: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    llm_base_url: str
-    llm_api_base_url: str
+    llm_base_url: str | None
     llm_model_name: str
     llm_display_name: str
     available_models: tuple[str, ...]
+    llm_model_urls: dict[str, str]
     llm_api_key: str
     embedding_base_url: str
     embedding_api_base_url: str
@@ -94,23 +135,45 @@ class Settings:
     llm_max_tokens: int
     llm_include_reasoning: bool
 
+    def get_llm_base_url(self, model_name: str | None = None) -> str:
+        selected_model = model_name or self.llm_model_name
+        if selected_model in self.llm_model_urls:
+            return self.llm_model_urls[selected_model]
+        if self.llm_base_url:
+            return self.llm_base_url
+        raise ValueError(
+            f"Missing MODEL_URL_{selected_model} and LLM_BASE_URL fallback."
+        )
+
+    def get_llm_api_base_url(self, model_name: str | None = None) -> str:
+        return _normalize_openai_base_url(self.get_llm_base_url(model_name))
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    llm_base_url = _require_env("LLM_BASE_URL")
     llm_model_name = _require_env("LLM_MODEL_NAME")
+    llm_base_url = _env_lookup("LLM_BASE_URL")
     embedding_base_url = _require_env("EMBEDDING_BASE_URL")
     reranker_base_url = _require_env("RERANKER_BASE_URL")
     available_models = _env_csv("AVAILABLE_MODELS", (llm_model_name,))
     if llm_model_name not in available_models:
         available_models = (llm_model_name, *available_models)
+    llm_model_urls = {
+        model_name: model_url.rstrip("/")
+        for model_name in available_models
+        if (model_url := _env_lookup(f"MODEL_URL_{model_name}"))
+    }
+    if not llm_base_url and llm_model_name not in llm_model_urls:
+        raise ValueError(
+            f"Missing MODEL_URL_{llm_model_name} and LLM_BASE_URL fallback."
+        )
 
     return Settings(
-        llm_base_url=llm_base_url.rstrip("/"),
-        llm_api_base_url=_normalize_openai_base_url(llm_base_url),
+        llm_base_url=llm_base_url.rstrip("/") if llm_base_url else None,
         llm_model_name=llm_model_name,
         llm_display_name=_env_str("LLM_DISPLAY_NAME", llm_model_name),
         available_models=available_models,
+        llm_model_urls=llm_model_urls,
         llm_api_key=_require_env("LLM_API_KEY"),
         embedding_base_url=embedding_base_url.rstrip("/"),
         embedding_api_base_url=_normalize_openai_base_url(embedding_base_url),
@@ -160,7 +223,7 @@ def build_llm(model_name: str | None = None) -> ChatOpenAI:
     return ChatOpenAI(
         model=selected_model,
         api_key=settings.llm_api_key,
-        base_url=settings.llm_api_base_url,
+        base_url=settings.get_llm_api_base_url(selected_model),
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
         request_timeout=settings.request_timeout,

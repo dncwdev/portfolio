@@ -47,10 +47,14 @@ Copy-Item .env.template .env
 Template contents:
 
 ```dotenv
-LLM_BASE_URL=http://192.168.1.149:58888
+LLM_BASE_URL=
+MODEL_URL_gpt-oss-120b=http://192.168.1.149:58888
+MODEL_URL_solar-open-100b=http://192.168.1.149:58889
+MODEL_URL_qwen3.5-35b-a3b=http://192.168.1.149:58890
+MODEL_URL_qwen3.5-9b=http://192.168.1.149:58891
 LLM_MODEL_NAME=gpt-oss-120b
-LLM_DISPLAY_NAME=OPENAI/gpt-oss-120b
-AVAILABLE_MODELS=gpt-oss-120b,Solar-Open-100B,Qwen3.5-35B-A3B,Qwen3.5-9B
+LLM_DISPLAY_NAME=gpt-oss-120b
+AVAILABLE_MODELS=gpt-oss-120b,solar-open-100b,qwen3.5-35b-a3b,qwen3.5-9b
 LLM_API_KEY=empty
 
 EMBEDDING_BASE_URL=http://192.168.1.166:58001
@@ -78,6 +82,8 @@ LLM_TEMPERATURE=0
 LLM_MAX_TOKENS=2048
 LLM_INCLUDE_REASONING=false
 ```
+
+If `MODEL_URL_<selected-model>` is missing, the app falls back to `LLM_BASE_URL` when it is set.
 
 Pre-embed regulations once before starting the app:
 

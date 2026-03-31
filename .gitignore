@@ -31,3 +31,4 @@ build/
 .venv/
 venv/
 __pycache__/
+/.chroma/
