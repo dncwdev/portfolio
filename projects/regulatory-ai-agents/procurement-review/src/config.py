@@ -58,14 +58,17 @@ class Settings:
     llm_base_url: str
     llm_api_base_url: str
     llm_model_name: str
+    llm_display_name: str
     llm_api_key: str
     embedding_base_url: str
     embedding_api_base_url: str
     embedding_model_name: str
+    embedding_display_name: str
     embedding_api_key: str
     reranker_base_url: str
     reranker_score_url: str
     reranker_model_name: str
+    reranker_display_name: str
     reranker_api_key: str
     chroma_persist_dir: Path
     chroma_collection_name: str
@@ -89,14 +92,23 @@ def get_settings() -> Settings:
         llm_base_url=llm_base_url.rstrip("/"),
         llm_api_base_url=_normalize_openai_base_url(llm_base_url),
         llm_model_name=_require_env("LLM_MODEL_NAME"),
+        llm_display_name=_env_str("LLM_DISPLAY_NAME", _require_env("LLM_MODEL_NAME")),
         llm_api_key=_require_env("LLM_API_KEY"),
         embedding_base_url=embedding_base_url.rstrip("/"),
         embedding_api_base_url=_normalize_openai_base_url(embedding_base_url),
         embedding_model_name=_require_env("EMBEDDING_MODEL_NAME"),
+        embedding_display_name=_env_str(
+            "EMBEDDING_DISPLAY_NAME",
+            _require_env("EMBEDDING_MODEL_NAME"),
+        ),
         embedding_api_key=_require_env("EMBEDDING_API_KEY"),
         reranker_base_url=reranker_base_url.rstrip("/"),
         reranker_score_url=f"{reranker_base_url.rstrip('/')}/v1/score",
         reranker_model_name=_require_env("RERANKER_MODEL_NAME"),
+        reranker_display_name=_env_str(
+            "RERANKER_DISPLAY_NAME",
+            _require_env("RERANKER_MODEL_NAME"),
+        ),
         reranker_api_key=_require_env("RERANKER_API_KEY"),
         chroma_persist_dir=_resolve_path(_env_str("CHROMA_PERSIST_DIR", ".chroma")),
         chroma_collection_name=_env_str(

@@ -36,9 +36,9 @@ def render_sidebar(vectorstore: ProcurementVectorStore) -> None:
     st.sidebar.write(
         f"Retrieve / Rerank: `{settings.retrieval_top_k}` / `{settings.rerank_top_k}`"
     )
-    st.sidebar.write(f"LLM: `{settings.llm_model_name}`")
-    st.sidebar.write(f"Embedding: `{settings.embedding_model_name}`")
-    st.sidebar.write(f"Reranker: `{settings.reranker_model_name}`")
+    st.sidebar.write(f"LLM: `{settings.llm_display_name}`")
+    st.sidebar.write(f"Embedding: `{settings.embedding_display_name}`")
+    st.sidebar.write(f"Reranker: `{settings.reranker_display_name}`")
 
 
 def handle_ingestion(vectorstore: ProcurementVectorStore) -> None:
@@ -115,7 +115,7 @@ def handle_query(pipeline: ProcurementRAGPipeline, vectorstore: ProcurementVecto
 
 def main() -> None:
     st.title("Procurement Review Agent")
-    st.caption("LangChain LCEL + ChromaDB + vLLM OpenAI API + Streamlit")
+    st.caption("LangChain LCEL + ChromaDB + vLLM + Streamlit")
 
     vectorstore, pipeline = get_runtime()
     render_sidebar(vectorstore)

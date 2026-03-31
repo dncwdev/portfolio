@@ -1,3 +1,6 @@
 .chroma/
 __pycache__/
 *.pyc
+data/procurement_docs/**
+!data/procurement_docs/**/
+!data/procurement_docs/**/.gitkeep

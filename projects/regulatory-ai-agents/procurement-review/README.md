@@ -5,7 +5,7 @@ Phase 1 implementation of a procurement document review agent built with:
 - LangChain
 - ChromaDB
 - Streamlit
-- vLLM OpenAI-compatible endpoints for LLM, embeddings, and reranking
+- vLLM for LLM, embeddings, and reranking
 
 ## Phase 1 Scope
 
@@ -47,14 +47,17 @@ Template contents:
 ```dotenv
 LLM_BASE_URL=http://192.168.1.149:58888
 LLM_MODEL_NAME=gpt-oss-120b
+LLM_DISPLAY_NAME=OPENAI/gpt-oss-120b
 LLM_API_KEY=empty
 
 EMBEDDING_BASE_URL=http://192.168.1.166:58001
 EMBEDDING_MODEL_NAME=/model
+EMBEDDING_DISPLAY_NAME=BAAI/bge-m3
 EMBEDDING_API_KEY=empty
 
 RERANKER_BASE_URL=http://192.168.1.166:58002
 RERANKER_MODEL_NAME=/model
+RERANKER_DISPLAY_NAME=BAAI/bge-reranker-v2-m3
 RERANKER_API_KEY=empty
 
 CHROMA_PERSIST_DIR=.chroma
