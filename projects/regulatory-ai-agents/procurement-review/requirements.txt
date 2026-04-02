@@ -1,8 +1,10 @@
 chromadb==1.5.5
 langchain==1.2.13
 langchain-community==0.4.1
+langchain-mcp-adapters==0.2.2
 langchain-openai==1.1.12
 langchain-text-splitters==1.1.1
+mcp==1.27.0
 openai==2.30.0
 pypdf==6.9.2
 python-dotenv==1.2.2

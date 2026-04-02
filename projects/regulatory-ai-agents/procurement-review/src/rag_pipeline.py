@@ -1,42 +1,64 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from operator import itemgetter
 
+from langchain.agents import create_agent
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableBranch, RunnableLambda, RunnablePassthrough
 from langchain_openai import ChatOpenAI
 
+from .agent_tools import EvidenceCollector, build_agent_tools, retrieve_local_evidence
 from .config import Settings, build_llm, get_settings
 from .reranker import VLLMReranker
 from .vectorstore import ProcurementVectorStore
 
 
-RAG_PROMPT = """당신은 공공조달 문서를 규정과 대조해 준수 여부를 검토하는 AI 분석가입니다.
-반드시 제공된 규정 문맥과 문서 문맥 안에서만 판단하세요.
-문맥이 불충분하면 '추가 검토 필요'로 판단하고 부족한 점을 명시하세요.
+NO_DOCUMENT_MESSAGE = (
+    "조달 문서 근거를 찾지 못해 준수 여부를 판단할 수 없습니다. "
+    "문서를 업로드하고 다시 시도해 주세요."
+)
 
-답변 형식:
+NO_REGULATION_MESSAGE = (
+    "규정 근거가 없습니다. 로컬 규정 DB를 채우거나 USE_MCP=true로 설정한 뒤 다시 시도해 주세요."
+)
+
+AGENT_SYSTEM_PROMPT = """당신은 공공조달 규정 준수 검토를 위한 증거 수집 에이전트입니다.
+
+반드시 다음 원칙을 따르세요.
+- 최종 판단을 내리기 전에 `search_local_procurement_context`를 최소 한 번 호출하세요.
+- 업로드된 조달 문서와 로컬 규정 DB에서 충분한 근거를 찾을 때까지 검색 질의를 다듬어 다시 호출할 수 있습니다.
+- {mcp_instruction}
+- 도구가 반환한 근거만 사용하세요. 사전지식으로 근거를 꾸며내지 마세요.
+- 최종 응답은 짧아도 되지만, 어떤 도구를 사용했는지와 수집 상태가 드러나게 하세요.
+"""
+
+ANSWER_PROMPT = """당신은 공공조달 문서의 규정 준수 여부를 검토하는 AI 분석가입니다.
+
+아래에 제공된 규정 근거와 문서 근거만 사용해서 판단하세요.
+- 근거가 부족하거나 상충하면 반드시 `추가 확인 필요`로 판단하세요.
+- 규정 근거는 [R1], [R2] 형식으로, 문서 근거는 [D1], [D2] 형식으로 인용하세요.
+- 답변은 아래 형식을 그대로 지키세요.
+
 ## 준수 판단
-- 준수 / 위반 가능성 / 추가 검토 필요 중 하나
+- 준수 / 위반 가능성 / 추가 확인 필요 중 하나
+
 ## 핵심 근거
-- 규정 근거와 문서 근거를 함께 요약
+- 규정 근거와 문서 근거를 함께 묶어 핵심만 요약
+
 ## 판단 근거
-- 왜 그런 판단에 도달했는지 설명
+- 왜 그렇게 판단했는지 설명
+
 ## 추가 확인 필요사항
-- 문맥 밖에서 추가로 확인할 항목
+- 문서 밖에서 더 확인해야 할 항목
 
-규정 근거는 [R1], [R2], 문서 근거는 [D1], [D2] 형식으로 인용하세요.
-
-사용자 질문:
+질문:
 {question}
 
-관련 규정 문맥:
+규정 근거:
 {regulations_context}
 
-조달 문서 문맥:
+조달 문서 근거:
 {document_context}
 """
 
@@ -47,6 +69,7 @@ class RAGResponse:
     answer: str
     regulation_sources: list[Document]
     document_sources: list[Document]
+    used_mcp: bool = False
 
 
 class ProcurementRAGPipeline:
@@ -63,126 +86,117 @@ class ProcurementRAGPipeline:
         self.regulations_store = regulations_store
         self.reranker = reranker
         self.llm = llm or build_llm()
-        self.prompt = ChatPromptTemplate.from_template(RAG_PROMPT)
-
-        answer_chain = (
-            {
-                "question": itemgetter("question"),
-                "regulations_context": itemgetter("regulations_context"),
-                "document_context": itemgetter("document_context"),
-            }
-            | self.prompt
+        self.answer_chain = (
+            ChatPromptTemplate.from_template(ANSWER_PROMPT)
             | self.llm
             | StrOutputParser()
         )
 
-        generate_answer = RunnableBranch(
-            (
-                lambda payload: not payload["document_sources"],
-                RunnableLambda(
-                    lambda _: (
-                        "조달 문서 근거를 찾지 못해 준수 여부를 검토할 수 없습니다. "
-                        "문서를 업로드하고 인덱싱한 뒤 다시 시도해 주세요."
-                    )
-                ),
-            ),
-            answer_chain,
-        )
-
-        self.chain = (
-            RunnablePassthrough.assign(
-                regulations_query=RunnableLambda(
-                    lambda payload: self._build_regulations_query(payload["question"])
-                )
-            )
-            .assign(
-                regulation_sources=RunnableLambda(
-                    lambda payload: self._retrieve_and_rerank(
-                        self.regulations_store,
-                        payload["regulations_query"],
-                        citation_prefix="R",
-                        source_group="regulation",
-                    )
-                )
-            )
-            .assign(
-                document_sources=RunnableLambda(
-                    lambda payload: self._retrieve_and_rerank(
-                        self.document_store,
-                        payload["question"],
-                        citation_prefix="D",
-                        source_group="document",
-                    )
-                )
-            )
-            .assign(
-                regulations_context=RunnableLambda(
-                    lambda payload: self._format_context(
-                        payload["regulation_sources"],
-                        empty_message="관련 규정 근거 없음",
-                    )
-                )
-            )
-            .assign(
-                document_context=RunnableLambda(
-                    lambda payload: self._format_context(
-                        payload["document_sources"],
-                        empty_message="관련 조달 문서 근거 없음",
-                    )
-                )
-            )
-            .assign(answer=generate_answer)
-            | RunnableLambda(self._to_response)
-        )
-
     def invoke(self, question: str) -> RAGResponse:
-        return self.chain.invoke({"question": question})
+        normalized_question = question.strip()
+        if not normalized_question:
+            raise ValueError("Question must not be empty.")
 
-    def _build_regulations_query(self, question: str) -> str:
-        procurement_excerpt = self.document_store.get_collection_excerpt()
-        if not procurement_excerpt:
-            return question
-        return (
-            f"검토 질문:\n{question}\n\n"
-            "조달 문서 발췌:\n"
-            f"{procurement_excerpt}"
+        if self.document_store.get_stats()["chunk_count"] == 0:
+            return self._build_response(
+                question=normalized_question,
+                answer=NO_DOCUMENT_MESSAGE,
+                collector=EvidenceCollector(),
+            )
+
+        if (
+            self.regulations_store.get_stats()["chunk_count"] == 0
+            and not self.settings.use_mcp
+        ):
+            return self._build_response(
+                question=normalized_question,
+                answer=NO_REGULATION_MESSAGE,
+                collector=EvidenceCollector(),
+            )
+
+        collector = EvidenceCollector()
+        self._gather_agent_evidence(normalized_question, collector)
+
+        if (
+            not collector.document_sources
+            or (
+                not collector.regulation_sources
+                and self.regulations_store.get_stats()["chunk_count"] > 0
+            )
+        ):
+            retrieve_local_evidence(
+                query=normalized_question,
+                scope="all",
+                top_k=self.settings.rerank_top_k,
+                document_store=self.document_store,
+                regulations_store=self.regulations_store,
+                reranker=self.reranker,
+                collector=collector,
+                settings=self.settings,
+            )
+
+        if not collector.document_sources:
+            return self._build_response(
+                question=normalized_question,
+                answer=NO_DOCUMENT_MESSAGE,
+                collector=collector,
+            )
+
+        answer = self.answer_chain.invoke(
+            {
+                "question": normalized_question,
+                "regulations_context": self._format_context(
+                    collector.regulation_sources,
+                    empty_message="관련 규정 근거 없음",
+                ),
+                "document_context": self._format_context(
+                    collector.document_sources,
+                    empty_message="관련 조달 문서 근거 없음",
+                ),
+            }
         )
 
-    def _retrieve_and_rerank(
+        return self._build_response(
+            question=normalized_question,
+            answer=answer,
+            collector=collector,
+        )
+
+    def _gather_agent_evidence(
         self,
-        vectorstore: ProcurementVectorStore,
-        query: str,
-        citation_prefix: str,
-        source_group: str,
-    ) -> list[Document]:
-        retrieved = vectorstore.similarity_search(
-            query,
-            k=self.settings.retrieval_top_k,
+        question: str,
+        collector: EvidenceCollector,
+    ) -> None:
+        tools = build_agent_tools(
+            document_store=self.document_store,
+            regulations_store=self.regulations_store,
+            reranker=self.reranker,
+            collector=collector,
+            settings=self.settings,
         )
-        reranked = self.reranker.rerank(
-            query,
-            retrieved,
-            top_n=self.settings.rerank_top_k,
-        )
-        return self._attach_citations(
-            reranked,
-            prefix=citation_prefix,
-            source_group=source_group,
+        agent = create_agent(
+            model=self.llm,
+            tools=tools,
+            system_prompt=self._build_agent_system_prompt(),
         )
 
-    def _attach_citations(
-        self,
-        documents: list[Document],
-        prefix: str,
-        source_group: str,
-    ) -> list[Document]:
-        output: list[Document] = []
-        for index, document in enumerate(documents, start=1):
-            metadata = dict(document.metadata)
-            metadata["citation"] = f"{prefix}{index}"
-            metadata["source_group"] = source_group
-            output.append(Document(page_content=document.page_content, metadata=metadata))
-        return output
+        try:
+            agent.invoke({"messages": [{"role": "user", "content": question}]})
+        except Exception:
+            # If tool calling is not fully supported by the runtime model, the
+            # pipeline falls back to deterministic local retrieval below.
+            return
+
+    def _build_agent_system_prompt(self) -> str:
+        if self.settings.use_mcp:
+            mcp_instruction = (
+                "`search_korean_law_mcp`를 필요할 때 호출해 최신 법령, 조문, 판례, 법령해석을 보강하세요."
+            )
+        else:
+            mcp_instruction = (
+                "현재 MCP 법령 검색은 비활성화되어 있으므로 로컬 ChromaDB 근거만 사용하세요."
+            )
+        return AGENT_SYSTEM_PROMPT.format(mcp_instruction=mcp_instruction)
 
     def _format_context(self, documents: list[Document], empty_message: str) -> str:
         if not documents:
@@ -198,10 +212,21 @@ class ProcurementRAGPipeline:
             )
         return "\n\n".join(chunks)
 
-    def _to_response(self, payload: dict[str, object]) -> RAGResponse:
+    def _build_response(
+        self,
+        *,
+        question: str,
+        answer: str,
+        collector: EvidenceCollector,
+    ) -> RAGResponse:
+        used_mcp = any(
+            source.metadata.get("origin") == "mcp"
+            for source in collector.regulation_sources
+        )
         return RAGResponse(
-            question=payload["question"],
-            answer=payload["answer"],
-            regulation_sources=payload["regulation_sources"],
-            document_sources=payload["document_sources"],
+            question=question,
+            answer=answer,
+            regulation_sources=list(collector.regulation_sources),
+            document_sources=list(collector.document_sources),
+            used_mcp=used_mcp,
         )

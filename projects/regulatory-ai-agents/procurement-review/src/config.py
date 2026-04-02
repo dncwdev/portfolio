@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -92,6 +93,16 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return items or default
 
 
+def _env_shell_tokens(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    value = _env_lookup(name)
+    if value is None:
+        return default
+
+    posix_mode = os.name != "nt"
+    tokens = tuple(token for token in shlex.split(value, posix=posix_mode) if token)
+    return tokens or default
+
+
 def _resolve_path(path_str: str) -> Path:
     candidate = Path(path_str)
     return candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
@@ -134,6 +145,12 @@ class Settings:
     llm_temperature: float
     llm_max_tokens: int
     llm_include_reasoning: bool
+    use_mcp: bool
+    korean_law_mcp_transport: str
+    korean_law_mcp_command: str
+    korean_law_mcp_args: tuple[str, ...]
+    korean_law_mcp_url: str | None
+    law_oc: str | None
 
     def get_llm_base_url(self, model_name: str | None = None) -> str:
         selected_model = model_name or self.llm_model_name
@@ -167,6 +184,8 @@ def get_settings() -> Settings:
         raise ValueError(
             f"Missing MODEL_URL_{llm_model_name} and LLM_BASE_URL fallback."
         )
+
+    korean_law_mcp_url = _env_lookup("KOREAN_LAW_MCP_URL")
 
     return Settings(
         llm_base_url=llm_base_url.rstrip("/") if llm_base_url else None,
@@ -213,6 +232,15 @@ def get_settings() -> Settings:
         llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
         llm_max_tokens=_env_int("LLM_MAX_TOKENS", 2048),
         llm_include_reasoning=_env_bool("LLM_INCLUDE_REASONING", False),
+        use_mcp=_env_bool("USE_MCP", False),
+        korean_law_mcp_transport=_env_str("KOREAN_LAW_MCP_TRANSPORT", "stdio"),
+        korean_law_mcp_command=_env_str(
+            "KOREAN_LAW_MCP_COMMAND",
+            "korean-law-mcp",
+        ),
+        korean_law_mcp_args=_env_shell_tokens("KOREAN_LAW_MCP_ARGS"),
+        korean_law_mcp_url=korean_law_mcp_url.rstrip("/") if korean_law_mcp_url else None,
+        law_oc=_env_lookup("LAW_OC"),
     )
 
 

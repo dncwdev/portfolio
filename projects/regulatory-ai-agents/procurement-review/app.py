@@ -28,6 +28,7 @@ def refresh_runtime_config() -> None:
   if env_mtime != last_mtime:
     clear_config_caches()
     get_vectorstores.clear()
+    st.session_state.pop("selected_llm_model", None)
     st.session_state["_env_mtime_ns"] = env_mtime
 
 
@@ -108,6 +109,11 @@ def render_sidebar(
   st.sidebar.write(
       f"Retrieve / Rerank: `{settings.retrieval_top_k}` / `{settings.rerank_top_k}`"
   )
+  st.sidebar.write(
+      f"Mode: `{'local + MCP' if settings.use_mcp else 'local only'}`"
+  )
+  if settings.use_mcp:
+    st.sidebar.write(f"MCP Transport: `{settings.korean_law_mcp_transport}`")
   st.sidebar.write(f"LLM: `{selected_model}`")
   st.sidebar.write(f"Embedding: `{settings.embedding_display_name}`")
   st.sidebar.write(f"Reranker: `{settings.reranker_display_name}`")
@@ -164,13 +170,12 @@ def render_source_section(title: str, sources: list) -> None:
     label = source.metadata.get("citation", "S?")
     file_name = source.metadata.get("source", "unknown")
     page = source.metadata.get("page", "-")
-    retrieval_score = float(source.metadata.get("retrieval_score", 0.0))
-    rerank_score = float(source.metadata.get("rerank_score", 0.0))
-    collection_name = source.metadata.get("collection_name", "unknown")
-    title_text = (
-        f"[{label}] {file_name} | page {page} | "
-        f"retrieve={retrieval_score:.4f} | rerank={rerank_score:.4f}"
-    )
+    details = [f"[{label}] {file_name}", f"page {page}"]
+    if "retrieval_score" in source.metadata:
+      details.append(f"retrieve={float(source.metadata['retrieval_score']):.4f}")
+    if "rerank_score" in source.metadata:
+      details.append(f"rerank={float(source.metadata['rerank_score']):.4f}")
+    title_text = " | ".join(details)
     with st.expander(title_text):
       st.write(source.page_content)
 
@@ -180,6 +185,7 @@ def handle_query(
     document_store: ProcurementVectorStore,
     regulations_store: ProcurementVectorStore,
 ) -> None:
+  settings = get_settings()
   st.subheader("Ask Questions")
   question = st.text_area(
       "Review question",
@@ -189,18 +195,25 @@ def handle_query(
 
   has_documents = document_store.get_stats()["chunk_count"] > 0
   has_regulations = regulations_store.get_stats()["chunk_count"] > 0
-  disabled = not has_documents or not has_regulations or not question.strip()
+  disabled = (
+      not has_documents
+      or (not has_regulations and not settings.use_mcp)
+      or not question.strip()
+  )
 
   if not has_documents:
     st.info("문서를 먼저 업로드하고 인덱싱해야 질의를 실행할 수 있습니다.")
   elif not has_regulations:
-    st.info(
-        "규정 DB가 비어 있습니다. `python scripts/ingest_regulations.py`를 먼저 실행해 주세요."
-    )
+    if settings.use_mcp:
+      st.info("로컬 규정 DB는 비어 있지만 USE_MCP=true라서 korean-law-mcp 검색을 함께 사용할 수 있습니다.")
+    else:
+      st.info(
+          "규정 DB가 비어 있습니다. `python scripts/ingest_regulations.py`를 먼저 실행해 주세요."
+      )
 
-  if st.button("Run RAG Review", type="primary", use_container_width=True, disabled=disabled):
+  if st.button("Run Compliance Review", type="primary", use_container_width=True, disabled=disabled):
     try:
-      with st.spinner("Retrieving regulations, reviewing document evidence, and generating a compliance judgment..."):
+      with st.spinner("Running the evidence-gathering agent and generating a compliance judgment..."):
         st.session_state["last_response"] = pipeline.invoke(question.strip())
     except Exception as exc:  # pragma: no cover - UI feedback
       st.error(f"Query failed: {exc}")
@@ -210,6 +223,8 @@ def handle_query(
     return
 
   st.markdown("### Compliance Review")
+  if response.used_mcp:
+    st.caption("This review used korean-law-mcp evidence in addition to local ChromaDB evidence.")
   st.write(response.answer)
 
   render_source_section("Regulation Evidence", response.regulation_sources)
@@ -219,7 +234,7 @@ def handle_query(
 def main() -> None:
   refresh_runtime_config()
   st.title("Procurement Review Agent")
-  st.caption("LangChain LCEL + ChromaDB + vLLM + Streamlit")
+  st.caption("LangChain Agent + ChromaDB + optional korean-law-mcp + vLLM + Streamlit")
 
   selected_model = select_llm_model()
   document_store, regulations_store = get_vectorstores()
