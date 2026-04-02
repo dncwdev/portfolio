@@ -45,13 +45,13 @@ def _read_env_file_values() -> dict[str, str]:
 
 
 def _env_lookup(name: str) -> str | None:
-    value = os.getenv(name)
-    if value is not None and value.strip():
-        return value.strip()
-
     file_value = _read_env_file_values().get(name)
     if file_value is not None and file_value.strip():
         return file_value.strip()
+
+    value = os.getenv(name)
+    if value is not None and value.strip():
+        return value.strip()
     return None
 
 
@@ -252,3 +252,11 @@ def build_reranker():
     from .reranker import VLLMReranker
 
     return VLLMReranker(settings=get_settings())
+
+
+def clear_config_caches() -> None:
+    _read_env_file_values.cache_clear()
+    get_settings.cache_clear()
+    build_llm.cache_clear()
+    build_embeddings.cache_clear()
+    build_reranker.cache_clear()

@@ -2,12 +2,33 @@ from __future__ import annotations
 
 import streamlit as st
 
-from src.config import build_embeddings, build_llm, build_reranker, get_settings
+from src.config import (
+    ENV_PATH,
+    build_embeddings,
+    build_llm,
+    build_reranker,
+    clear_config_caches,
+    get_settings,
+)
 from src.rag_pipeline import ProcurementRAGPipeline
 from src.vectorstore import ProcurementVectorStore, UploadFilePayload
 
 
 st.set_page_config(page_title="Procurement Review Agent", layout="wide")
+
+
+def refresh_runtime_config() -> None:
+  env_mtime = ENV_PATH.stat().st_mtime_ns if ENV_PATH.exists() else None
+  last_mtime = st.session_state.get("_env_mtime_ns")
+
+  if last_mtime is None:
+    st.session_state["_env_mtime_ns"] = env_mtime
+    return
+
+  if env_mtime != last_mtime:
+    clear_config_caches()
+    get_vectorstores.clear()
+    st.session_state["_env_mtime_ns"] = env_mtime
 
 
 @st.cache_resource(show_spinner=False)
@@ -196,6 +217,7 @@ def handle_query(
 
 
 def main() -> None:
+  refresh_runtime_config()
   st.title("Procurement Review Agent")
   st.caption("LangChain LCEL + ChromaDB + vLLM + Streamlit")
 
