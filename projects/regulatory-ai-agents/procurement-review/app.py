@@ -310,10 +310,6 @@ def handle_query(
     return
 
   st.markdown("### Compliance Review")
-  st.caption(
-      "Executed with reranker: "
-      f"`{response.reranker_name} [{response.reranker_engine}] @ {response.reranker_base_url}`"
-  )
   if response.used_mcp:
     st.caption("This review used korean-law-mcp evidence in addition to local ChromaDB evidence.")
   st.write(response.answer)
