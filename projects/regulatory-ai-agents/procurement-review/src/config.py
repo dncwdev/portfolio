@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from functools import lru_cache
@@ -114,6 +115,22 @@ def _normalize_openai_base_url(base_url: str) -> str:
 
 
 @dataclass(frozen=True)
+class RerankerProfile:
+    key: str
+    base_url: str
+    model_name: str
+    display_name: str
+    api_key: str
+    engine: str
+
+    def get_score_url(self, engine: str | None = None) -> str:
+        runtime_engine = (engine or self.engine).lower()
+        if runtime_engine == "infinity":
+            return f"{self.base_url}/rerank"
+        return f"{self.base_url}/v1/score"
+
+
+@dataclass(frozen=True)
 class Settings:
     llm_base_url: str | None
     llm_model_name: str
@@ -126,11 +143,9 @@ class Settings:
     embedding_model_name: str
     embedding_display_name: str
     embedding_api_key: str
-    reranker_base_url: str
-    reranker_score_url: str
-    reranker_model_name: str
-    reranker_display_name: str
-    reranker_api_key: str
+    available_reranker_keys: tuple[str, ...]
+    reranker_profiles: dict[str, RerankerProfile]
+    default_reranker_key: str
     chroma_persist_dir: Path
     chroma_collection_name: str
     regulations_collection_name: str
@@ -165,13 +180,113 @@ class Settings:
     def get_llm_api_base_url(self, model_name: str | None = None) -> str:
         return _normalize_openai_base_url(self.get_llm_base_url(model_name))
 
+    def get_reranker_profile(
+        self,
+        reranker_key: str | None = None,
+    ) -> RerankerProfile:
+        selected_key = reranker_key or self.default_reranker_key
+        if selected_key in self.reranker_profiles:
+            return self.reranker_profiles[selected_key]
+        raise ValueError(
+            f"Unknown reranker profile: {selected_key}. "
+            f"Available: {', '.join(self.available_reranker_keys)}"
+        )
+
+    @property
+    def reranker_base_url(self) -> str:
+        return self.get_reranker_profile().base_url
+
+    @property
+    def reranker_score_url(self) -> str:
+        return self.get_reranker_profile().get_score_url()
+
+    @property
+    def reranker_model_name(self) -> str:
+        return self.get_reranker_profile().model_name
+
+    @property
+    def reranker_display_name(self) -> str:
+        return self.get_reranker_profile().display_name
+
+    @property
+    def reranker_api_key(self) -> str:
+        return self.get_reranker_profile().api_key
+
+    @property
+    def reranker_engine(self) -> str:
+        return self.get_reranker_profile().engine
+
+
+def _discover_reranker_suffixes() -> tuple[str, ...]:
+    suffixes: set[str] = set()
+    pattern = re.compile(r"^RERANKER_BASE_URL(\d*)$")
+
+    for key in _read_env_file_values():
+        match = pattern.match(key)
+        if match:
+            suffixes.add(match.group(1))
+
+    for key, value in os.environ.items():
+        if not value or not value.strip():
+            continue
+        match = pattern.match(key)
+        if match:
+            suffixes.add(match.group(1))
+
+    if not suffixes:
+        return ("",)
+
+    return tuple(
+        sorted(
+            suffixes,
+            key=lambda item: (0, 0) if item == "" else (1, int(item or "0")),
+        )
+    )
+
+
+def _build_reranker_profiles() -> tuple[tuple[str, ...], dict[str, RerankerProfile]]:
+    available_keys: list[str] = []
+    profiles: dict[str, RerankerProfile] = {}
+
+    for suffix in _discover_reranker_suffixes():
+        base_url_name = f"RERANKER_BASE_URL{suffix}"
+        if _env_lookup(base_url_name) is None:
+            continue
+
+        key = "default" if not suffix else suffix
+        engine = _env_str(f"RERANKER_ENGINE{suffix}", "auto").lower()
+        if engine not in {"auto", "vllm", "infinity"}:
+            raise ValueError(
+                f"Unsupported reranker engine '{engine}' for profile '{key}'. "
+                "Expected one of: auto, vllm, infinity."
+            )
+
+        model_name = _require_env(f"RERANKER_MODEL_NAME{suffix}")
+        profiles[key] = RerankerProfile(
+            key=key,
+            base_url=_require_env(base_url_name).rstrip("/"),
+            model_name=model_name,
+            display_name=_env_str(
+                f"RERANKER_DISPLAY_NAME{suffix}",
+                model_name,
+            ),
+            api_key=_env_str(f"RERANKER_API_KEY{suffix}", ""),
+            engine=engine,
+        )
+        available_keys.append(key)
+
+    if not available_keys:
+        raise ValueError("Missing required environment variable: RERANKER_BASE_URL")
+
+    return tuple(available_keys), profiles
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     llm_model_name = _require_env("LLM_MODEL_NAME")
     llm_base_url = _env_lookup("LLM_BASE_URL")
     embedding_base_url = _require_env("EMBEDDING_BASE_URL")
-    reranker_base_url = _require_env("RERANKER_BASE_URL")
+    available_reranker_keys, reranker_profiles = _build_reranker_profiles()
     available_models = _env_csv("AVAILABLE_MODELS", (llm_model_name,))
     if llm_model_name not in available_models:
         available_models = (llm_model_name, *available_models)
@@ -186,6 +301,12 @@ def get_settings() -> Settings:
         )
 
     korean_law_mcp_url = _env_lookup("KOREAN_LAW_MCP_URL")
+    default_reranker_key = _env_str("DEFAULT_RERANKER_KEY", available_reranker_keys[0])
+    if default_reranker_key not in reranker_profiles:
+        raise ValueError(
+            f"Unknown DEFAULT_RERANKER_KEY: {default_reranker_key}. "
+            f"Available: {', '.join(available_reranker_keys)}"
+        )
 
     return Settings(
         llm_base_url=llm_base_url.rstrip("/") if llm_base_url else None,
@@ -202,14 +323,9 @@ def get_settings() -> Settings:
             _require_env("EMBEDDING_MODEL_NAME"),
         ),
         embedding_api_key=_require_env("EMBEDDING_API_KEY"),
-        reranker_base_url=reranker_base_url.rstrip("/"),
-        reranker_score_url=f"{reranker_base_url.rstrip('/')}/v1/score",
-        reranker_model_name=_require_env("RERANKER_MODEL_NAME"),
-        reranker_display_name=_env_str(
-            "RERANKER_DISPLAY_NAME",
-            _require_env("RERANKER_MODEL_NAME"),
-        ),
-        reranker_api_key=_require_env("RERANKER_API_KEY"),
+        available_reranker_keys=available_reranker_keys,
+        reranker_profiles=reranker_profiles,
+        default_reranker_key=default_reranker_key,
         chroma_persist_dir=_resolve_path(_env_str("CHROMA_PERSIST_DIR", ".chroma")),
         chroma_collection_name=_env_str(
             "CHROMA_COLLECTION_NAME",
@@ -275,11 +391,15 @@ def build_embeddings() -> OpenAIEmbeddings:
     )
 
 
-@lru_cache(maxsize=1)
-def build_reranker():
-    from .reranker import VLLMReranker
+@lru_cache(maxsize=16)
+def build_reranker(reranker_key: str | None = None):
+    from .reranker import build_reranker_client
 
-    return VLLMReranker(settings=get_settings())
+    settings = get_settings()
+    return build_reranker_client(
+        settings=settings,
+        profile=settings.get_reranker_profile(reranker_key),
+    )
 
 
 def clear_config_caches() -> None:

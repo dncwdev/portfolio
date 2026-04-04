@@ -4,7 +4,8 @@ Procurement compliance review agent built with:
 
 - LangChain agent runtime
 - ChromaDB dual collections (`regulations` + uploaded procurement documents)
-- vLLM OpenAI-compatible endpoints for LLM, embeddings, and reranking
+- vLLM OpenAI-compatible endpoints for LLM and embeddings
+- Selectable rerankers via vLLM `/v1/score` or Infinity `/rerank`
 - Streamlit UI
 - Optional `korean-law-mcp` integration for external law lookup
 
@@ -27,11 +28,11 @@ This keeps the existing answer structure while allowing selective external legal
 
 - `src/config.py`
   - Loads `.env`
-  - Builds LLM, embeddings, reranker, and MCP runtime settings
+  - Builds LLM, embeddings, multi-reranker, and MCP runtime settings
 - `src/vectorstore.py`
   - Handles local ChromaDB ingestion and similarity search
 - `src/reranker.py`
-  - Calls the vLLM `/v1/score` reranker endpoint
+  - Calls either the vLLM `/v1/score` reranker endpoint or the Infinity `/rerank` endpoint
 - `src/agent_tools.py`
   - Defines the LangChain local search tool
   - Defines the LangChain `korean-law-mcp` wrapper tool
@@ -77,6 +78,14 @@ RERANKER_BASE_URL=http://192.168.1.166:58002
 RERANKER_MODEL_NAME=/model
 RERANKER_DISPLAY_NAME=BAAI/bge-reranker-v2-m3
 RERANKER_API_KEY=empty
+RERANKER_ENGINE=vllm
+
+RERANKER_BASE_URL2=http://127.0.0.1:58002
+RERANKER_MODEL_NAME2=/model
+RERANKER_DISPLAY_NAME2=BAAI/bge-reranker-v2-m3
+RERANKER_API_KEY2=empty
+RERANKER_ENGINE2=infinity
+DEFAULT_RERANKER_KEY=default
 
 CHROMA_PERSIST_DIR=.chroma
 CHROMA_COLLECTION_NAME=procurement_regulations
@@ -108,6 +117,10 @@ Notes:
 - If `MODEL_URL_<selected-model>` is missing, the app falls back to `LLM_BASE_URL`.
 - `USE_MCP=false` keeps the system fully local.
 - `USE_MCP=true` enables the optional MCP tool.
+- `USE_MCP` is the default mode on startup, but the Streamlit sidebar can override it at runtime.
+- `RERANKER_ENGINE` supports `vllm`, `infinity`, or `auto`.
+- Additional reranker profiles can be added with numeric suffixes such as `RERANKER_BASE_URL2`.
+- The Streamlit sidebar lets you switch rerankers at runtime without editing code.
 - For stdio mode, install `korean-law-mcp` separately and set `LAW_OC`.
 - For HTTP mode, set `KOREAN_LAW_MCP_TRANSPORT=http` and `KOREAN_LAW_MCP_URL`.
 
@@ -117,7 +130,7 @@ Example stdio configuration:
 USE_MCP=true
 KOREAN_LAW_MCP_TRANSPORT=stdio
 KOREAN_LAW_MCP_COMMAND=npx
-KOREAN_LAW_MCP_ARGS=-y korean-law-mcp
+KOREAN_LAW_MCP_ARGS=-y --package korean-law-mcp korean-law-mcp
 LAW_OC=your-law-go-kr-open-api-key
 ```
 

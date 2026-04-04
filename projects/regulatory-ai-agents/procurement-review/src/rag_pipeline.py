@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 
 from .agent_tools import EvidenceCollector, build_agent_tools, retrieve_local_evidence
 from .config import Settings, build_llm, get_settings
-from .reranker import VLLMReranker
+from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
 
@@ -70,6 +70,10 @@ class RAGResponse:
     regulation_sources: list[Document]
     document_sources: list[Document]
     used_mcp: bool = False
+    reranker_key: str = "default"
+    reranker_name: str = ""
+    reranker_engine: str = ""
+    reranker_base_url: str = ""
 
 
 class ProcurementRAGPipeline:
@@ -77,7 +81,7 @@ class ProcurementRAGPipeline:
         self,
         document_store: ProcurementVectorStore,
         regulations_store: ProcurementVectorStore,
-        reranker: VLLMReranker,
+        reranker: BaseReranker,
         llm: ChatOpenAI | None = None,
         settings: Settings | None = None,
     ) -> None:
@@ -115,10 +119,12 @@ class ProcurementRAGPipeline:
             )
 
         collector = EvidenceCollector()
-        self._gather_agent_evidence(normalized_question, collector)
+        if self.settings.use_mcp:
+            self._gather_agent_evidence(normalized_question, collector)
 
         if (
-            not collector.document_sources
+            not self.settings.use_mcp
+            or not collector.document_sources
             or (
                 not collector.regulation_sources
                 and self.regulations_store.get_stats()["chunk_count"] > 0
@@ -229,4 +235,8 @@ class ProcurementRAGPipeline:
             regulation_sources=list(collector.regulation_sources),
             document_sources=list(collector.document_sources),
             used_mcp=used_mcp,
+            reranker_key=self.reranker.profile.key,
+            reranker_name=self.reranker.profile.display_name,
+            reranker_engine=self.reranker.profile.engine,
+            reranker_base_url=self.reranker.profile.base_url,
         )

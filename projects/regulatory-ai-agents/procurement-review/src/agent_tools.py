@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
 from .mcp_client import KoreanLawMCPClient, KoreanLawSearchType
-from .reranker import VLLMReranker
+from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
 
@@ -45,7 +45,12 @@ class EvidenceCollector:
             key = self._build_key(document, group=group)
             if group == "regulation":
                 if key in self._regulation_keys:
-                    existing = self._find_existing(document, self.regulation_sources, key, group)
+                    existing = self._find_existing(
+                        document,
+                        self.regulation_sources,
+                        key,
+                        group,
+                    )
                     if existing is not None:
                         output.append(existing)
                     continue
@@ -55,7 +60,12 @@ class EvidenceCollector:
                 target_list = self.regulation_sources
             else:
                 if key in self._document_keys:
-                    existing = self._find_existing(document, self.document_sources, key, group)
+                    existing = self._find_existing(
+                        document,
+                        self.document_sources,
+                        key,
+                        group,
+                    )
                     if existing is not None:
                         output.append(existing)
                     continue
@@ -148,7 +158,7 @@ def build_agent_tools(
     *,
     document_store: ProcurementVectorStore,
     regulations_store: ProcurementVectorStore,
-    reranker: VLLMReranker,
+    reranker: BaseReranker,
     collector: EvidenceCollector,
     settings: Settings | None = None,
 ) -> list[BaseTool]:
@@ -201,10 +211,7 @@ def build_agent_tools(
                     limit=limit,
                 )
             except Exception as exc:
-                return (
-                    "MCP 법령 검색을 실행하지 못했습니다. "
-                    f"오류: {exc}"
-                )
+                return f"MCP 법령 검색을 실행하지 못했습니다. 오류: {exc}"
 
             regulation_sources = collector.add_regulation_documents(documents)
             return format_regulation_evidence(
@@ -225,7 +232,7 @@ def retrieve_local_evidence(
     top_k: int,
     document_store: ProcurementVectorStore,
     regulations_store: ProcurementVectorStore,
-    reranker: VLLMReranker,
+    reranker: BaseReranker,
     collector: EvidenceCollector,
     settings: Settings | None = None,
 ) -> tuple[list[Document], list[Document]]:
@@ -334,7 +341,7 @@ def _format_document_block(
 def _retrieve_and_rerank(
     *,
     vectorstore: ProcurementVectorStore,
-    reranker: VLLMReranker,
+    reranker: BaseReranker,
     query: str,
     retrieval_top_k: int,
     rerank_top_k: int,
