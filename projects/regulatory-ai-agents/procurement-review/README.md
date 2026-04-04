@@ -98,6 +98,7 @@ REGULATIONS_CHUNK_SIZE=500
 REGULATIONS_CHUNK_OVERLAP=50
 RETRIEVAL_TOP_K=20
 RERANK_TOP_K=5
+RERANK_SCORE_THRESHOLD=0.05
 
 REQUEST_TIMEOUT=600
 LLM_TEMPERATURE=0
@@ -119,6 +120,7 @@ Notes:
 - `USE_MCP=true` enables the optional MCP tool.
 - `USE_MCP` is the default mode on startup, but the Streamlit sidebar can override it at runtime.
 - `RERANKER_ENGINE` supports `vllm`, `infinity`, or `auto`.
+- Chunks with rerank score below `RERANK_SCORE_THRESHOLD` are excluded before they reach the LLM.
 - Additional reranker profiles can be added with numeric suffixes such as `RERANKER_BASE_URL2`.
 - The Streamlit sidebar lets you switch rerankers at runtime without editing code.
 - For stdio mode, install `korean-law-mcp` separately and set `LAW_OC`.
@@ -169,6 +171,8 @@ Make sure the selected vLLM model/server is configured for OpenAI-compatible too
 Offline validation completed:
 
 - `python -m compileall app.py src`
+- `python scripts/test_retrieval_determinism.py --query "적용 법령 및 규정 검토"`
+- `python scripts/audit_regulations_coverage.py`
 
 Live validation is still required against:
 

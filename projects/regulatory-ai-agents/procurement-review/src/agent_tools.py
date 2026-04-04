@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -10,10 +11,18 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
+from .domain_queries import (
+    DomainQueryTemplate,
+    build_domain_query,
+    get_domain_query_templates,
+    normalize_domain_query_templates,
+)
 from .mcp_client import KoreanLawMCPClient, KoreanLawSearchType
 from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
+
+logger = logging.getLogger(__name__)
 
 LocalSearchScope = Literal["all", "documents", "regulations"]
 
@@ -116,7 +125,13 @@ class EvidenceCollector:
 
 
 class LocalSearchInput(BaseModel):
-    query: str = Field(..., description="Search query for local ChromaDB retrieval.")
+    query_template: DomainQueryTemplate = Field(
+        ...,
+        description=(
+            "Choose one predefined procurement-review domain query template. "
+            "Do not invent a free-form query."
+        ),
+    )
     scope: LocalSearchScope = Field(
         default="all",
         description="Search scope: all, documents, or regulations.",
@@ -161,19 +176,20 @@ def build_agent_tools(
     reranker: BaseReranker,
     collector: EvidenceCollector,
     settings: Settings | None = None,
+    question_context: str = "",
 ) -> list[BaseTool]:
     runtime_settings = settings or get_settings()
     mcp_client = KoreanLawMCPClient(settings=runtime_settings)
 
     @tool("search_local_procurement_context", args_schema=LocalSearchInput)
     def search_local_procurement_context(
-        query: str,
+        query_template: DomainQueryTemplate,
         scope: LocalSearchScope = "all",
         top_k: int = 5,
     ) -> str:
-        """Search local regulations and uploaded procurement documents in ChromaDB."""
+        """Search local ChromaDB with one predefined procurement-review domain query template."""
         regulation_sources, document_sources = retrieve_local_evidence(
-            query=query,
+            query=question_context,
             scope=scope,
             top_k=top_k,
             document_store=document_store,
@@ -181,9 +197,11 @@ def build_agent_tools(
             reranker=reranker,
             collector=collector,
             settings=runtime_settings,
+            query_templates=(query_template,),
         )
         return format_local_evidence(
-            query=query,
+            review_question=question_context,
+            query_templates=(query_template,),
             regulation_sources=regulation_sources,
             document_sources=document_sources,
             use_mcp=runtime_settings.use_mcp,
@@ -215,7 +233,8 @@ def build_agent_tools(
 
             regulation_sources = collector.add_regulation_documents(documents)
             return format_regulation_evidence(
-                query=query or document_id or "",
+                review_question=query or document_id or "",
+                query_templates=(),
                 documents=regulation_sources,
                 empty_message="MCP 법령 검색 결과가 없습니다.",
             )
@@ -235,30 +254,38 @@ def retrieve_local_evidence(
     reranker: BaseReranker,
     collector: EvidenceCollector,
     settings: Settings | None = None,
+    query_templates: Sequence[str] | None = None,
 ) -> tuple[list[Document], list[Document]]:
     runtime_settings = settings or get_settings()
     rerank_limit = max(1, min(top_k, runtime_settings.rerank_top_k))
+    selected_templates = normalize_domain_query_templates(
+        list(query_templates) if query_templates is not None else None
+    )
 
     regulation_sources: list[Document] = []
     document_sources: list[Document] = []
 
     if scope in {"all", "regulations"}:
-        local_regulations = _retrieve_and_rerank(
+        local_regulations = _retrieve_template_bundle(
             vectorstore=regulations_store,
             reranker=reranker,
-            query=query,
+            review_question=query,
+            query_templates=selected_templates,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
+            rerank_score_threshold=runtime_settings.rerank_score_threshold,
         )
         regulation_sources = collector.add_regulation_documents(local_regulations)
 
     if scope in {"all", "documents"}:
-        local_documents = _retrieve_and_rerank(
+        local_documents = _retrieve_template_bundle(
             vectorstore=document_store,
             reranker=reranker,
-            query=query,
+            review_question=query,
+            query_templates=selected_templates,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
+            rerank_score_threshold=runtime_settings.rerank_score_threshold,
         )
         document_sources = collector.add_document_documents(local_documents)
 
@@ -267,16 +294,25 @@ def retrieve_local_evidence(
 
 def format_local_evidence(
     *,
-    query: str,
+    review_question: str,
+    query_templates: Sequence[str],
     regulation_sources: Sequence[Document],
     document_sources: Sequence[Document],
     use_mcp: bool,
 ) -> str:
-    sections = [f"Local ChromaDB search query: {query}"]
+    selected_templates = normalize_domain_query_templates(
+        list(query_templates) if query_templates else None
+    )
+    sections = [f"Review question: {review_question}"]
+    sections.append(
+        "Selected domain query templates: "
+        + ", ".join(selected_templates)
+    )
 
     sections.append(
         format_regulation_evidence(
-            query=query,
+            review_question=review_question,
+            query_templates=selected_templates,
             documents=regulation_sources,
             empty_message=(
                 "No local regulation evidence found."
@@ -297,11 +333,21 @@ def format_local_evidence(
 
 def format_regulation_evidence(
     *,
-    query: str,
+    review_question: str,
+    query_templates: Sequence[str],
     documents: Sequence[Document],
     empty_message: str,
 ) -> str:
-    heading = f"Regulation Evidence for query: {query}" if query else "Regulation Evidence"
+    if query_templates:
+        selected_templates = normalize_domain_query_templates(list(query_templates))
+        heading = (
+            "Regulation Evidence "
+            f"for templates: {', '.join(selected_templates)}"
+        )
+    elif review_question:
+        heading = f"Regulation Evidence for question: {review_question}"
+    else:
+        heading = "Regulation Evidence"
     return _format_document_block(
         title=heading,
         documents=documents,
@@ -338,15 +384,131 @@ def _format_document_block(
     return "\n".join(chunks)
 
 
+def _retrieve_template_bundle(
+    *,
+    vectorstore: ProcurementVectorStore,
+    reranker: BaseReranker,
+    review_question: str,
+    query_templates: Sequence[DomainQueryTemplate],
+    retrieval_top_k: int,
+    rerank_top_k: int,
+    rerank_score_threshold: float,
+) -> list[Document]:
+    best_documents: dict[str, Document] = {}
+
+    for query_template in query_templates:
+        template_query = build_domain_query(review_question, query_template)
+        reranked_documents = _retrieve_and_rerank(
+            vectorstore=vectorstore,
+            reranker=reranker,
+            query=template_query,
+            query_template=query_template,
+            retrieval_top_k=retrieval_top_k,
+            rerank_top_k=rerank_top_k,
+            rerank_score_threshold=rerank_score_threshold,
+        )
+
+        for document in reranked_documents:
+            key = _document_result_key(document)
+            existing = best_documents.get(key)
+            templates = set(existing.metadata.get("matched_query_templates", [])) if existing else set()
+            templates.add(query_template)
+
+            if existing is None or float(document.metadata.get("rerank_score", 0.0)) > float(
+                existing.metadata.get("rerank_score", 0.0)
+            ):
+                metadata = dict(document.metadata)
+                metadata["matched_query_templates"] = sorted(templates)
+                best_documents[key] = Document(
+                    page_content=document.page_content,
+                    metadata=metadata,
+                )
+                continue
+
+            metadata = dict(existing.metadata)
+            metadata["matched_query_templates"] = sorted(templates)
+            best_documents[key] = Document(
+                page_content=existing.page_content,
+                metadata=metadata,
+            )
+
+    ranked_bundle = sorted(
+        best_documents.values(),
+        key=lambda item: float(item.metadata.get("rerank_score", 0.0)),
+        reverse=True,
+    )
+
+    output: list[Document] = []
+    for index, document in enumerate(ranked_bundle[:rerank_top_k], start=1):
+        metadata = dict(document.metadata)
+        metadata["rerank_rank"] = index
+        output.append(Document(page_content=document.page_content, metadata=metadata))
+    return output
+
+
 def _retrieve_and_rerank(
     *,
     vectorstore: ProcurementVectorStore,
     reranker: BaseReranker,
     query: str,
+    query_template: DomainQueryTemplate,
     retrieval_top_k: int,
     rerank_top_k: int,
+    rerank_score_threshold: float,
 ) -> list[Document]:
     retrieved = vectorstore.similarity_search(query, k=retrieval_top_k)
     if not retrieved:
         return []
-    return reranker.rerank(query, retrieved, top_n=rerank_top_k)
+
+    reranked = reranker.rerank(query, retrieved, top_n=retrieval_top_k)
+    kept_documents: list[Document] = []
+
+    for document in reranked:
+        score = float(document.metadata.get("rerank_score", 0.0))
+        if score < rerank_score_threshold:
+            logger.info(
+                "Excluded chunk below rerank threshold %.2f | collection=%s | template=%s | chunk_id=%s | source=%s | page=%s | score=%.4f",
+                rerank_score_threshold,
+                vectorstore.collection_name,
+                query_template,
+                document.metadata.get("chunk_id", "unknown"),
+                document.metadata.get("source", "unknown"),
+                document.metadata.get("page", "-"),
+                score,
+            )
+            continue
+        kept_documents.append(document)
+
+    if not kept_documents:
+        logger.warning(
+            "No chunks survived rerank threshold %.2f | collection=%s | template=%s",
+            rerank_score_threshold,
+            vectorstore.collection_name,
+            query_template,
+        )
+
+    return kept_documents[:rerank_top_k]
+
+
+def _document_result_key(document: Document) -> str:
+    metadata = document.metadata
+    chunk_id = metadata.get("chunk_id")
+    if chunk_id:
+        return str(chunk_id)
+
+    payload = "|".join(
+        [
+            str(metadata.get("source", "unknown")),
+            str(metadata.get("page", "-")),
+            document.page_content,
+        ]
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def collect_chunk_ids(documents: Sequence[Document]) -> list[str]:
+    return [_document_result_key(document) for document in documents]
+
+
+def get_default_query_templates() -> tuple[DomainQueryTemplate, ...]:
+    return get_domain_query_templates()

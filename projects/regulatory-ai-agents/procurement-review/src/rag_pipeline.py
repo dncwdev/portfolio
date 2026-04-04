@@ -8,8 +8,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from .agent_tools import EvidenceCollector, build_agent_tools, retrieve_local_evidence
+from .agent_tools import (
+    EvidenceCollector,
+    build_agent_tools,
+    get_default_query_templates,
+    retrieve_local_evidence,
+)
 from .config import Settings, build_llm, get_settings
+from .domain_queries import format_domain_query_template_guide
 from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
@@ -23,19 +29,22 @@ NO_REGULATION_MESSAGE = (
     "규정 근거가 없습니다. 로컬 규정 DB를 채우거나 USE_MCP=true로 설정한 뒤 다시 시도해 주세요."
 )
 
-AGENT_SYSTEM_PROMPT = """당신은 공공조달 규정 준수 검토를 위한 증거 수집 에이전트입니다.
+AGENT_SYSTEM_PROMPT = """당신은 공공조달 구매규격서 검토를 위한 증거 수집 에이전트입니다.
 
 반드시 다음 원칙을 따르세요.
-- 최종 판단을 내리기 전에 `search_local_procurement_context`를 최소 한 번 호출하세요.
-- 업로드된 조달 문서와 로컬 규정 DB에서 충분한 근거를 찾을 때까지 검색 질의를 다듬어 다시 호출할 수 있습니다.
+- 로컬 ChromaDB 검색이 필요하면 자유로운 검색어를 만들지 말고, 아래의 고정 템플릿 중 하나를 `query_template`로 선택해 `search_local_procurement_context`를 호출하세요.
+{query_template_guide}
+- 질문과 가장 관련 있는 템플릿을 1개 이상 선택할 수 있지만, 불필요하게 같은 템플릿을 반복 호출하지 마세요.
 - {mcp_instruction}
 - 도구가 반환한 근거만 사용하세요. 사전지식으로 근거를 꾸며내지 마세요.
-- 최종 응답은 짧아도 되지만, 어떤 도구를 사용했는지와 수집 상태가 드러나게 하세요.
+- 최종 응답은 짧아도 되지만, 어떤 템플릿과 도구를 사용했는지 드러나게 하세요.
 """
 
-ANSWER_PROMPT = """당신은 공공조달 문서의 규정 준수 여부를 검토하는 AI 분석가입니다.
+ANSWER_PROMPT = """당신은 공공조달 구매규격서 초안의 법령 준수 여부를 검토하는 AI 분석가입니다.
 
 아래에 제공된 규정 근거와 문서 근거만 사용해서 판단하세요.
+- 검토 범위는 규격서 작성 단계에서 법령이 요구하는 조항의 포함 여부입니다. 계약 이후 이행 여부는 판단 대상이 아닙니다.
+- 낙찰 후 제출 서류, 계약 이행, 검사·검수, 대금 지급, 하자보수, 운영 단계 확인사항은 `추가 확인 필요사항`에 포함하지 마세요.
 - 근거가 부족하거나 상충하면 반드시 `추가 확인 필요`로 판단하세요.
 - 규정 근거는 [R1], [R2] 형식으로, 문서 근거는 [D1], [D2] 형식으로 인용하세요.
 - 답변은 아래 형식을 그대로 지키세요.
@@ -50,7 +59,7 @@ ANSWER_PROMPT = """당신은 공공조달 문서의 규정 준수 여부를 검�
 - 왜 그렇게 판단했는지 설명
 
 ## 추가 확인 필요사항
-- 문서 밖에서 더 확인해야 할 항목
+- 입찰 전 구매규격서에 반영되어야 하지만 현재 근거가 부족한 항목만 적기
 
 질문:
 {question}
@@ -139,6 +148,7 @@ class ProcurementRAGPipeline:
                 reranker=self.reranker,
                 collector=collector,
                 settings=self.settings,
+                query_templates=get_default_query_templates(),
             )
 
         if not collector.document_sources:
@@ -179,6 +189,7 @@ class ProcurementRAGPipeline:
             reranker=self.reranker,
             collector=collector,
             settings=self.settings,
+            question_context=question,
         )
         agent = create_agent(
             model=self.llm,
@@ -196,13 +207,17 @@ class ProcurementRAGPipeline:
     def _build_agent_system_prompt(self) -> str:
         if self.settings.use_mcp:
             mcp_instruction = (
-                "`search_korean_law_mcp`를 필요할 때 호출해 최신 법령, 조문, 판례, 법령해석을 보강하세요."
+                "`search_korean_law_mcp`는 필요할 때만 호출하고, "
+                "로컬 검색은 반드시 고정 템플릿으로 수행하세요."
             )
         else:
             mcp_instruction = (
-                "현재 MCP 법령 검색은 비활성화되어 있으므로 로컬 ChromaDB 근거만 사용하세요."
+                "현재 MCP 법령 검색은 비활성화되어 있으므로 로컬 ChromaDB와 고정 템플릿만 사용하세요."
             )
-        return AGENT_SYSTEM_PROMPT.format(mcp_instruction=mcp_instruction)
+        return AGENT_SYSTEM_PROMPT.format(
+            mcp_instruction=mcp_instruction,
+            query_template_guide=format_domain_query_template_guide(),
+        )
 
     def _format_context(self, documents: list[Document], empty_message: str) -> str:
         if not documents:
@@ -213,8 +228,14 @@ class ProcurementRAGPipeline:
             citation = document.metadata.get("citation", "S?")
             source = document.metadata.get("source", "unknown")
             page = document.metadata.get("page", "-")
+            matched_templates = document.metadata.get("matched_query_templates", [])
+            template_text = (
+                f" templates={','.join(matched_templates)}"
+                if matched_templates
+                else ""
+            )
             chunks.append(
-                f"[{citation}] source={source} page={page}\n{document.page_content}"
+                f"[{citation}] source={source} page={page}{template_text}\n{document.page_content}"
             )
         return "\n\n".join(chunks)
 
