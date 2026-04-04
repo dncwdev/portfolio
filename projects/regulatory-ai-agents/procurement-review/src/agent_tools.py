@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .domain_queries import (
     DomainQueryTemplate,
     build_domain_query,
+    get_domain_rerank_query,
     get_domain_query_templates,
     normalize_domain_query_templates,
 )
@@ -273,7 +274,7 @@ def retrieve_local_evidence(
             query_templates=selected_templates,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
-            rerank_score_threshold=runtime_settings.rerank_score_threshold,
+            rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
         )
         regulation_sources = collector.add_regulation_documents(local_regulations)
 
@@ -285,7 +286,7 @@ def retrieve_local_evidence(
             query_templates=selected_templates,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
-            rerank_score_threshold=runtime_settings.rerank_score_threshold,
+            rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
         )
         document_sources = collector.add_document_documents(local_documents)
 
@@ -392,20 +393,23 @@ def _retrieve_template_bundle(
     query_templates: Sequence[DomainQueryTemplate],
     retrieval_top_k: int,
     rerank_top_k: int,
-    rerank_score_threshold: float,
+    rerank_relative_threshold: float,
 ) -> list[Document]:
     best_documents: dict[str, Document] = {}
 
     for query_template in query_templates:
-        template_query = build_domain_query(review_question, query_template)
+        retrieval_query = build_domain_query(review_question, query_template)
+        # The reranker works better with a targeted domain template string than the full review question.
+        rerank_query = get_domain_rerank_query(query_template)
         reranked_documents = _retrieve_and_rerank(
             vectorstore=vectorstore,
             reranker=reranker,
-            query=template_query,
+            retrieval_query=retrieval_query,
+            rerank_query=rerank_query,
             query_template=query_template,
             retrieval_top_k=retrieval_top_k,
             rerank_top_k=rerank_top_k,
-            rerank_score_threshold=rerank_score_threshold,
+            rerank_relative_threshold=rerank_relative_threshold,
         )
 
         for document in reranked_documents:
@@ -450,41 +454,63 @@ def _retrieve_and_rerank(
     *,
     vectorstore: ProcurementVectorStore,
     reranker: BaseReranker,
-    query: str,
+    retrieval_query: str,
+    rerank_query: str,
     query_template: DomainQueryTemplate,
     retrieval_top_k: int,
     rerank_top_k: int,
-    rerank_score_threshold: float,
+    rerank_relative_threshold: float,
 ) -> list[Document]:
-    retrieved = vectorstore.similarity_search(query, k=retrieval_top_k)
+    retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
     if not retrieved:
         return []
 
-    reranked = reranker.rerank(query, retrieved, top_n=retrieval_top_k)
+    reranked = reranker.rerank(rerank_query, retrieved, top_n=retrieval_top_k)
+    if not reranked:
+        return []
+
+    max_score = max(float(document.metadata.get("rerank_score", 0.0)) for document in reranked)
+    relative_cutoff = max_score * rerank_relative_threshold
     kept_documents: list[Document] = []
 
     for document in reranked:
         score = float(document.metadata.get("rerank_score", 0.0))
-        if score < rerank_score_threshold:
+        metadata = dict(document.metadata)
+        metadata["retrieval_query"] = retrieval_query
+        metadata["rerank_query"] = rerank_query
+        metadata["rerank_max_score"] = max_score
+        metadata["rerank_relative_cutoff"] = relative_cutoff
+        normalized_document = Document(
+            page_content=document.page_content,
+            metadata=metadata,
+        )
+
+        if score < relative_cutoff:
             logger.info(
-                "Excluded chunk below rerank threshold %.2f | collection=%s | template=%s | chunk_id=%s | source=%s | page=%s | score=%.4f",
-                rerank_score_threshold,
+                "Excluded chunk below relative rerank threshold %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f | chunk_id=%s | source=%s | page=%s | score=%.4f",
+                rerank_relative_threshold,
                 vectorstore.collection_name,
                 query_template,
-                document.metadata.get("chunk_id", "unknown"),
-                document.metadata.get("source", "unknown"),
-                document.metadata.get("page", "-"),
+                rerank_query,
+                max_score,
+                relative_cutoff,
+                metadata.get("chunk_id", "unknown"),
+                metadata.get("source", "unknown"),
+                metadata.get("page", "-"),
                 score,
             )
             continue
-        kept_documents.append(document)
+        kept_documents.append(normalized_document)
 
     if not kept_documents:
         logger.warning(
-            "No chunks survived rerank threshold %.2f | collection=%s | template=%s",
-            rerank_score_threshold,
+            "No chunks survived relative rerank threshold %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f",
+            rerank_relative_threshold,
             vectorstore.collection_name,
             query_template,
+            rerank_query,
+            max_score,
+            relative_cutoff,
         )
 
     return kept_documents[:rerank_top_k]

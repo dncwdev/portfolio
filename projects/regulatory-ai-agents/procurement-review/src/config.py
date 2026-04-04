@@ -156,7 +156,7 @@ class Settings:
     regulations_chunk_overlap: int
     retrieval_top_k: int
     rerank_top_k: int
-    rerank_score_threshold: float
+    rerank_relative_threshold: float
     request_timeout: float
     llm_temperature: float
     llm_max_tokens: int
@@ -345,7 +345,7 @@ def get_settings() -> Settings:
         regulations_chunk_overlap=_env_int("REGULATIONS_CHUNK_OVERLAP", 50),
         retrieval_top_k=_env_int("RETRIEVAL_TOP_K", 20),
         rerank_top_k=_env_int("RERANK_TOP_K", 5),
-        rerank_score_threshold=_env_float("RERANK_SCORE_THRESHOLD", 0.05),
+        rerank_relative_threshold=_env_float("RERANK_RELATIVE_THRESHOLD", 0.15),
         request_timeout=_env_float("REQUEST_TIMEOUT", 600.0),
         llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
         llm_max_tokens=_env_int("LLM_MAX_TOKENS", 2048),

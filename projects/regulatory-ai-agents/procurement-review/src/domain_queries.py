@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, TypeAlias, cast
 
 
@@ -25,20 +26,20 @@ DOMAIN_QUERY_TEMPLATES: dict[DomainQueryTemplate, str] = {
         "필수 기재 조항과 법적 근거를 찾는다."
     ),
     "보안 및 정보보호 요건": (
-        "구매규격서에 포함해야 하는 보안, 정보보호, 개인정보, 접근통제, "
-        "비밀유지, 보안서약 관련 요구사항을 찾는다."
+        "구매규격서에 포함해야 하는 보안, 정보보호, 개인정보, 접근통제, 비밀유지, "
+        "보안서약 관련 요구사항을 찾는다."
     ),
     "안전보건 요건": (
-        "구매규격서에 포함해야 하는 안전보건, 산업안전, 작업자 보호, "
-        "위험관리, 안전조치 관련 요구사항을 찾는다."
+        "구매규격서에 포함해야 하는 안전보건, 산업안전, 작업자 보호, 위험관리, "
+        "안전조치 관련 요구사항을 찾는다."
     ),
     "계약 자격 및 허가 요건": (
-        "입찰참가자 또는 계약상대자에게 요구되는 자격, 등록, 면허, 허가, "
-        "인증, 실적 요건을 찾는다."
+        "입찰참가자 또는 계약상대자에게 요구되는 자격, 등록, 면허, 허가, 인증, "
+        "실적 요건을 찾는다."
     ),
     "발주 전 준수 요건": (
-        "입찰 공고 전 구매규격서 작성 단계에서 확인해야 하는 공정성, 경쟁성, "
-        "차별금지, 사전 심의, 필수 첨부조항을 찾는다."
+        "입찰 공고 전 구매규격서 작성 단계에서 확인해야 하는 공정성, 경쟁성, 차별금지, "
+        "사전 심의, 필수 첨부조항을 찾는다."
     ),
 }
 
@@ -48,7 +49,7 @@ def get_domain_query_templates() -> tuple[DomainQueryTemplate, ...]:
 
 
 def normalize_domain_query_templates(
-    query_templates: tuple[str, ...] | list[str] | None,
+    query_templates: Sequence[str] | None,
 ) -> tuple[DomainQueryTemplate, ...]:
     if not query_templates:
         return DOMAIN_QUERY_ORDER
@@ -82,6 +83,10 @@ def build_domain_query(
         ]
     )
     return "\n".join(query_lines)
+
+
+def get_domain_rerank_query(query_template: DomainQueryTemplate) -> str:
+    return DOMAIN_QUERY_TEMPLATES[query_template]
 
 
 def format_domain_query_template_guide() -> str:
