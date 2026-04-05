@@ -21,37 +21,13 @@ from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
 
-ZERO_WIDTH_RE = re.compile(r"[\u200B\u200C\u200D\u2060\uFEFF]+")
-THINKING_BLOCK_PATTERNS = (
-    re.compile(
-        r"<\s*(think|thinking|reasoning|analysis|thought)\b[^>]*>.*?<\s*/\s*\1\s*>",
-        flags=re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(
-        r"\[\s*(think|thinking|reasoning|analysis|thought)\s*\].*?\[/\s*\1\s*\]",
-        flags=re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(
-        r"<\|(?:start|begin)_?(?:think|thinking|reasoning|analysis)\|>.*?<\|(?:end|stop)_?(?:think|thinking|reasoning|analysis)\|>",
-        flags=re.IGNORECASE | re.DOTALL,
-    ),
+THINK_TAG_BLOCK_RE = re.compile(
+    r"<\s*think\b[^>]*>.*?(?:<\s*/\s*think\s*>|$)",
+    flags=re.IGNORECASE | re.DOTALL,
 )
-THINKING_TAG_RE = re.compile(
-    r"<\s*/?\s*(think|thinking|reasoning|analysis|thought)\b[^>]*>",
-    flags=re.IGNORECASE,
+THINKING_PROCESS_LINE_RE = re.compile(
+    r"(?im)^\s*Thinking Process:\s*$"
 )
-THINKING_TOKEN_RE = re.compile(
-    r"</?\|[^|>]*(?:think|thinking|reasoning|analysis)[^|>]*\|>",
-    flags=re.IGNORECASE,
-)
-SPECIAL_NOISE_WITH_ZERO_WIDTH_RE = re.compile(
-    r"[!?.](?:[\u200B\u200C\u200D\u2060\uFEFF]+[!?.]?){2,}"
-)
-REPEATED_SPECIAL_RE = re.compile(r"([!?.])(?:\s*\1){2,}")
-LONG_PUNCTUATION_BURST_RE = re.compile(r"(?:[!?.]\s*){6,}")
-MARKDOWN_HEADING_RE = re.compile(r"(?m)^(#{1,6})([^ #])")
-FIRST_MARKDOWN_HEADING_RE = re.compile(r"(?m)^##\s+")
-FIRST_SECTION_RE = re.compile(r"(?:^|\n)(##\s*준수 판단|준수 판단)")
 
 
 NO_DOCUMENT_MESSAGE = (
@@ -72,6 +48,7 @@ AGENT_SYSTEM_PROMPT = """당신은 공공조달 구매규격서 검토를 위한
 - {mcp_instruction}
 - 도구가 반환한 근거만 사용하세요. 사전지식으로 근거를 꾸며내지 마세요.
 - 최종 응답은 짧아도 되지만, 어떤 템플릿과 도구를 사용했는지 드러나게 하세요.
+- 모든 최종 응답은 반드시 한국어로 작성하세요
 """
 
 ANSWER_PROMPT = """당신은 공공조달 구매규격서 초안의 법령 준수 여부를 검토하는 AI 분석가입니다.
@@ -298,22 +275,8 @@ class ProcurementRAGPipeline:
     )
 
   def _sanitize_final_answer(self, answer: str) -> str:
-    sanitized = answer
-
-    for pattern in THINKING_BLOCK_PATTERNS:
-      sanitized = pattern.sub("", sanitized)
-    sanitized = THINKING_TAG_RE.sub("", sanitized)
-    sanitized = THINKING_TOKEN_RE.sub("", sanitized)
-    sanitized = SPECIAL_NOISE_WITH_ZERO_WIDTH_RE.sub("", sanitized)
-    sanitized = ZERO_WIDTH_RE.sub("", sanitized)
-    sanitized = LONG_PUNCTUATION_BURST_RE.sub("", sanitized)
-    sanitized = REPEATED_SPECIAL_RE.sub(r"\1", sanitized)
-    sanitized = re.sub(r"[ \t]+\n", "\n", sanitized)
-    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
-    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
-    sanitized = MARKDOWN_HEADING_RE.sub(r"\1 \2", sanitized)
-    if match := FIRST_MARKDOWN_HEADING_RE.search(sanitized):
-      sanitized = sanitized[match.start():].lstrip()
-    if match := FIRST_SECTION_RE.search(sanitized):
-      sanitized = sanitized[match.start():].lstrip()
-    return sanitized.strip()
+    original = answer.strip()
+    sanitized = THINK_TAG_BLOCK_RE.sub("", answer)
+    sanitized = THINKING_PROCESS_LINE_RE.sub("", sanitized)
+    sanitized = sanitized.strip()
+    return sanitized or original
