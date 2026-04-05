@@ -21,9 +21,10 @@ from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
 
-THINK_TAG_BLOCK_RE = re.compile(
-    r"<\s*think\b[^>]*>.*?(?:<\s*/\s*think\s*>|$)",
-    flags=re.IGNORECASE | re.DOTALL,
+THINK_TAG_CLOSE_RE = re.compile(r"<\s*/\s*think\s*>", flags=re.IGNORECASE)
+THINKING_LIKE_START_RE = re.compile(
+    r"^\s*(?:<\s*think\b|thinking(?:\s+process)?\s*:|reasoning\s*:|analysis\s*:)",
+    flags=re.IGNORECASE,
 )
 THINKING_PROCESS_LINE_RE = re.compile(
     r"(?im)^\s*Thinking Process:\s*$"
@@ -37,6 +38,9 @@ NO_DOCUMENT_MESSAGE = (
 
 NO_REGULATION_MESSAGE = (
     "규정 근거가 없습니다. 로컬 규정 DB를 채우거나 USE_MCP=true로 설정한 뒤 다시 시도해 주세요."
+)
+MODEL_RESPONSE_ERROR_MESSAGE = (
+    "모델 응답 생성 중 오류가 발생했습니다. 다시 시도해 주세요."
 )
 
 AGENT_SYSTEM_PROMPT = """당신은 공공조달 구매규격서 검토를 위한 증거 수집 에이전트입니다.
@@ -276,7 +280,12 @@ class ProcurementRAGPipeline:
 
   def _sanitize_final_answer(self, answer: str) -> str:
     original = answer.strip()
-    sanitized = THINK_TAG_BLOCK_RE.sub("", answer)
-    sanitized = THINKING_PROCESS_LINE_RE.sub("", sanitized)
+    closing_matches = list(THINK_TAG_CLOSE_RE.finditer(answer))
+    if closing_matches:
+      sanitized = answer[closing_matches[-1].end() :]
+    else:
+      if THINKING_LIKE_START_RE.match(answer):
+        return MODEL_RESPONSE_ERROR_MESSAGE
+      sanitized = THINKING_PROCESS_LINE_RE.sub("", answer)
     sanitized = sanitized.strip()
     return sanitized or original
