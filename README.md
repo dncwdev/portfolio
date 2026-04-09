@@ -7,13 +7,13 @@ and operations.
 
 ## Projects
 
-| Project                         | Summary                                                                                        | Tech                                 | Link                                                                                   |
-| ------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------- |
-| AI Inference Platform           | Air-gapped/on-prem multi-model serving with RAG-oriented endpoints                             | Kubernetes, vLLM, Ollama, Open-WebUI | [README](projects/ai-inference-platform/README.md)                                     |
-| LLM Inference Benchmark         | GPT-OSS 120B performance comparison across H100 cluster and DGX Spark (vLLM vs Ollama)         | vLLM, Ollama, DGX Spark, H100        | [README](projects/llm-inference-benchmark/README.md)                                   |
-| Ray Multi-Node Inference        | Multi-node LLM inference using Ray + vLLM across two DGX Spark systems (GPT-OSS 120B)          | Ray, vLLM, DGX Spark, GB10           | [README](projects/ray-multinode-inference/README.md)                                   |
-| Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction                                    | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md)                                        |
-| Procurement Review Agent        | Air-gapped compliance review agent with LangChain + ChromaDB dual-collection RAG and reranking | LangChain, ChromaDB, vLLM, Streamlit | [README](https://github.com/dncwdev/regulatory-ai-agents/procurement-review/README.md) |
+| Project                         | Summary                                                                                        | Tech                                 | Link                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------- |
+| AI Inference Platform           | Air-gapped/on-prem multi-model serving with RAG-oriented endpoints                             | Kubernetes, vLLM, Ollama, Open-WebUI | [README](projects/ai-inference-platform/README.md)                   |
+| LLM Inference Benchmark         | GPT-OSS 120B performance comparison across H100 cluster and DGX Spark (vLLM vs Ollama)         | vLLM, Ollama, DGX Spark, H100        | [README](projects/llm-inference-benchmark/README.md)                 |
+| Ray Multi-Node Inference        | Multi-node LLM inference using Ray + vLLM across two DGX Spark systems (GPT-OSS 120B)          | Ray, vLLM, DGX Spark, GB10           | [README](projects/ray-multinode-inference/README.md)                 |
+| Container Platform (Case Study) | Docker/Compose runtime + ops runbook + minimal reproduction                                    | Docker, Compose, Prometheus, Grafana | [README](projects/container-platform/README.md)                      |
+| Procurement Review Agent        | Air-gapped compliance review agent with LangChain + ChromaDB dual-collection RAG and reranking | LangChain, ChromaDB, vLLM, Streamlit | [README](projects/regulatory-ai-agents/procurement-review/README.md) |
 
 ## Skills
 
