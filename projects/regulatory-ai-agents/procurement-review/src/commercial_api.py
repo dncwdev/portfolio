@@ -27,7 +27,7 @@ COMMERCIAL_MODELS: dict[str, CommercialModelProfile] = {
         alias="cohere",
         base_url="https://api.cohere.ai/v2",
         api_key_env="COHERE_API_KEY",
-        model="command-r-plus-08-2024",
+        model="command-a-03-2025",
     ),
     "openai": CommercialModelProfile(
         alias="openai",

@@ -120,7 +120,7 @@ LAW_OC=
 Notes:
 
 - If `MODEL_URL_<selected-model>` is missing, the app falls back to `LLM_BASE_URL`.
-- `cohere`, `openai`, and `anthropic` are commercial API aliases for Cohere Command R+ (`command-r-plus-08-2024` over Chat API v2), OpenAI GPT-4o, and Claude Sonnet 4. They use `COHERE_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY`.
+- `cohere`, `openai`, and `anthropic` are commercial API aliases for Cohere Command A (`command-a-03-2025` over Chat API v2), OpenAI GPT-4o, and Claude Sonnet 4. They use `COHERE_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY`.
 - Cohere output is capped at 4096 tokens in code to match the provider limit even when `LLM_MAX_TOKENS` is higher for local models.
 - `USE_MCP=false` keeps the system fully local.
 - `USE_MCP=true` enables the optional MCP tool.

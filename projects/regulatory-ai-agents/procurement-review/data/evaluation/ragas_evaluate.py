@@ -15,10 +15,11 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from ragas import EvaluationDataset, evaluate
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
-from ragas.metrics.collections.answer_relevancy import metric as answer_relevancy
-from ragas.metrics.collections.context_precision import metric as context_precision
-from ragas.metrics.collections.context_recall import metric as context_recall
-from ragas.metrics.collections.faithfulness import metric as faithfulness
+from ragas.metrics import (
+    answer_relevancy,
+    faithfulness,
+)
+from ragas.run_config import RunConfig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 EVAL_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = EVAL_DIR / "results"
 DEFAULT_RESULTS_CSV = RESULTS_DIR / "ragas_results.csv"
+EVALUATOR_LLM_MODEL = "gpt-4o"
+EVALUATOR_EMBEDDING_MODEL = "text-embedding-3-small"
+RAGAS_EVALUATOR_MAX_WORKERS = 4
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,8 +130,6 @@ def upsert_results_csv(path: Path, model_name: str, summary: dict[str, float]) -
         "model_name",
         "faithfulness",
         "answer_relevancy",
-        "context_precision",
-        "context_recall",
     ]
     existing_rows: list[dict[str, str]] = []
     if path.exists():
@@ -139,8 +141,6 @@ def upsert_results_csv(path: Path, model_name: str, summary: dict[str, float]) -
         "model_name": model_name,
         "faithfulness": f"{summary['faithfulness']:.6f}",
         "answer_relevancy": f"{summary['answer_relevancy']:.6f}",
-        "context_precision": f"{summary['context_precision']:.6f}",
-        "context_recall": f"{summary['context_recall']:.6f}",
     }
     output_rows: list[dict[str, str]] = []
     for row in existing_rows:
@@ -148,7 +148,7 @@ def upsert_results_csv(path: Path, model_name: str, summary: dict[str, float]) -
             output_rows.append(serialized)
             updated = True
         else:
-            output_rows.append(row)
+            output_rows.append({field: row.get(field, "") for field in fieldnames})
     if not updated:
         output_rows.append(serialized)
 
@@ -164,8 +164,6 @@ def print_summary_table(model_name: str, summary: dict[str, float]) -> None:
         ("model_name", model_name),
         ("faithfulness", f"{summary['faithfulness']:.4f}"),
         ("answer_relevancy", f"{summary['answer_relevancy']:.4f}"),
-        ("context_precision", f"{summary['context_precision']:.4f}"),
-        ("context_recall", f"{summary['context_recall']:.4f}"),
     ]
     key_width = max(len(key) for key, _ in rows)
     value_width = max(len(value) for _, value in rows)
@@ -193,31 +191,46 @@ def main() -> None:
     evaluation_dataset = build_evaluation_dataset(answers)
 
     evaluator_llm = ChatOpenAI(
-        model="gpt-4o",
+        model=EVALUATOR_LLM_MODEL,
         api_key=openai_api_key,
         base_url="https://api.openai.com/v1",
         temperature=0,
-        max_tokens=1024,
+        max_tokens=2048,
         request_timeout=120,
         max_retries=2,
         use_responses_api=False,
     )
-    evaluator_embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        api_key=openai_api_key,
-        base_url="https://api.openai.com/v1",
-        request_timeout=120,
-        max_retries=2,
-        tiktoken_enabled=False,
-        check_embedding_ctx_length=False,
+    evaluator_embeddings = LangchainEmbeddingsWrapper(
+        OpenAIEmbeddings(
+            model=EVALUATOR_EMBEDDING_MODEL,
+            api_key=openai_api_key,
+            base_url="https://api.openai.com/v1",
+            request_timeout=120,
+            max_retries=2,
+            tiktoken_enabled=False,
+            check_embedding_ctx_length=False,
+        )
     )
 
-    logger.info("Running RAGAS evaluation for %s", answers_path)
+    logger.info(
+        "Running RAGAS evaluation for %s | evaluator_llm=%s | embedding=%s",
+        answers_path,
+        EVALUATOR_LLM_MODEL,
+        EVALUATOR_EMBEDDING_MODEL,
+    )
     result = evaluate(
         dataset=evaluation_dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+        metrics=[faithfulness, answer_relevancy],
         llm=LangchainLLMWrapper(evaluator_llm),
-        embeddings=LangchainEmbeddingsWrapper(evaluator_embeddings),
+        embeddings=evaluator_embeddings,
+        run_config=RunConfig(
+            timeout=180,
+            max_retries=3,
+            max_wait=30,
+            max_workers=RAGAS_EVALUATOR_MAX_WORKERS,
+            exception_types=(Exception,),
+            log_tenacity=True,
+        ),
         raise_exceptions=False,
         show_progress=True,
     )
@@ -225,8 +238,6 @@ def main() -> None:
     summary = {
         "faithfulness": average_metric(result.scores, "faithfulness"),
         "answer_relevancy": average_metric(result.scores, "answer_relevancy"),
-        "context_precision": average_metric(result.scores, "context_precision"),
-        "context_recall": average_metric(result.scores, "context_recall"),
     }
     upsert_results_csv(DEFAULT_RESULTS_CSV, model_label, summary)
     print_summary_table(model_label, summary)
