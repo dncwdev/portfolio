@@ -11,6 +11,9 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from openai import OpenAI
 
 
+COHERE_MAX_OUTPUT_TOKENS = 4096
+
+
 @dataclass(frozen=True)
 class CommercialModelProfile:
     alias: str
@@ -22,9 +25,9 @@ class CommercialModelProfile:
 COMMERCIAL_MODELS: dict[str, CommercialModelProfile] = {
     "cohere": CommercialModelProfile(
         alias="cohere",
-        base_url="https://api.cohere.ai/v1",
+        base_url="https://api.cohere.ai/v2",
         api_key_env="COHERE_API_KEY",
-        model="command-r-plus",
+        model="command-r-plus-08-2024",
     ),
     "openai": CommercialModelProfile(
         alias="openai",
@@ -62,6 +65,17 @@ def require_commercial_api_key(profile: CommercialModelProfile) -> str:
     raise ValueError(f"Missing required environment variable: {profile.api_key_env}")
 
 
+def _raise_for_status(response: requests.Response) -> None:
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text.strip()
+        message = str(exc)
+        if body:
+            message = f"{message}. Response body: {body[:1000]}"
+        raise requests.HTTPError(message, response=response) from exc
+
+
 def _content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -92,18 +106,16 @@ def _message_role(message: BaseMessage) -> str:
     return "user"
 
 
-def _messages_to_prompt(messages: list[BaseMessage]) -> str:
-    role_labels = {"system": "System", "user": "User", "assistant": "Assistant"}
-    chunks: list[str] = []
+def _messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
     for message in messages:
-        role = _message_role(message)
         text = _content_to_text(message.content).strip()
         if text:
-            chunks.append(f"{role_labels.get(role, 'User')}:\n{text}")
-    return "\n\n".join(chunks)
+            output.append({"role": _message_role(message), "content": text})
+    return output or [{"role": "user", "content": ""}]
 
 
-def _messages_to_openai(messages: list[BaseMessage]) -> list[dict[str, str]]:
+def _messages_to_cohere(messages: list[BaseMessage]) -> list[dict[str, str]]:
     output: list[dict[str, str]] = []
     for message in messages:
         text = _content_to_text(message.content).strip()
@@ -152,6 +164,33 @@ def extract_anthropic_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def extract_cohere_text(payload: dict[str, Any]) -> str:
+    if payload.get("text"):
+        return str(payload["text"])
+
+    message = payload.get("message", {})
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+            else:
+                text = getattr(item, "text", None) or getattr(item, "content", None)
+            if text:
+                parts.append(str(text))
+        return "\n".join(parts)
+
+    chat_history = payload.get("chat_history", [])
+    if chat_history:
+        last_message = chat_history[-1].get("message")
+        if last_message:
+            return str(last_message)
+    return ""
+
+
 def call_openai_compatible_api(
     *,
     base_url: str,
@@ -181,18 +220,18 @@ def call_cohere_api(
     base_url: str,
     api_key: str,
     model: str,
-    prompt: str,
+    messages: list[dict[str, str]],
     max_tokens: int,
     timeout: float,
     temperature: float,
     stop: list[str] | None = None,
 ) -> str:
+    runtime_max_tokens = max(1, min(max_tokens, COHERE_MAX_OUTPUT_TOKENS))
     request: dict[str, Any] = {
         "model": model,
-        "message": prompt,
-        "stream": False,
+        "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": runtime_max_tokens,
     }
     if stop:
         request["stop_sequences"] = stop
@@ -206,16 +245,8 @@ def call_cohere_api(
         json=request,
         timeout=timeout,
     )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("text"):
-        return str(payload["text"]).strip()
-    chat_history = payload.get("chat_history", [])
-    if chat_history:
-        last_message = chat_history[-1].get("message")
-        if last_message:
-            return str(last_message).strip()
-    return ""
+    _raise_for_status(response)
+    return extract_cohere_text(response.json()).strip()
 
 
 def call_anthropic_api(
@@ -251,7 +282,7 @@ def call_anthropic_api(
         json=request,
         timeout=timeout,
     )
-    response.raise_for_status()
+    _raise_for_status(response)
     return extract_anthropic_text(response.json()).strip()
 
 
@@ -272,7 +303,7 @@ def call_commercial_llm(
             base_url=profile.base_url,
             api_key=api_key,
             model=profile.model,
-            prompt=prompt,
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             timeout=timeout,
             temperature=temperature,
@@ -320,7 +351,7 @@ def call_commercial_chat(
             base_url=base_url,
             api_key=api_key,
             model=model,
-            prompt=_messages_to_prompt(messages),
+            messages=_messages_to_cohere(messages),
             max_tokens=max_tokens,
             timeout=timeout,
             temperature=temperature,
