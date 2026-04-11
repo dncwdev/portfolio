@@ -4,10 +4,10 @@ from dataclasses import dataclass
 import re
 
 from langchain.agents import create_agent
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 
 from .agent_tools import (
     EvidenceCollector,
@@ -106,7 +106,7 @@ class ProcurementRAGPipeline:
       document_store: ProcurementVectorStore,
       regulations_store: ProcurementVectorStore,
       reranker: BaseReranker,
-      llm: ChatOpenAI | None = None,
+      llm: BaseChatModel | None = None,
       settings: Settings | None = None,
   ) -> None:
     self.settings = settings or get_settings()
@@ -132,9 +132,10 @@ class ProcurementRAGPipeline:
           collector=EvidenceCollector(),
       )
 
+    mcp_enabled = self.settings.use_mcp and not self.settings.is_commercial_model()
     if (
         self.regulations_store.get_stats()["chunk_count"] == 0
-        and not self.settings.use_mcp
+        and not mcp_enabled
     ):
       return self._build_response(
           question=normalized_question,
@@ -143,11 +144,11 @@ class ProcurementRAGPipeline:
       )
 
     collector = EvidenceCollector()
-    if self.settings.use_mcp:
+    if mcp_enabled:
       self._gather_agent_evidence(normalized_question, collector)
 
     if (
-        not self.settings.use_mcp
+        not mcp_enabled
         or not collector.document_sources
         or (
             not collector.regulation_sources

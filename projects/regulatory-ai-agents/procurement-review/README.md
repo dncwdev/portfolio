@@ -66,8 +66,12 @@ MODEL_URL_qwen3.5-35b-a3b=http://192.168.1.149:58890
 MODEL_URL_qwen3.5-9b=http://192.168.1.149:58891
 LLM_MODEL_NAME=gpt-oss-120b
 LLM_DISPLAY_NAME=gpt-oss-120b
-AVAILABLE_MODELS=gpt-oss-120b,exaone-4.0-32b,qwen3.5-35b-a3b,qwen3.5-9b
+AVAILABLE_MODELS=gpt-oss-120b,exaone-4.0-32b,qwen3.5-35b-a3b,qwen3.5-9b,cohere,openai,anthropic
 LLM_API_KEY=empty
+
+COHERE_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 
 EMBEDDING_BASE_URL=http://192.168.1.166:58001
 EMBEDDING_MODEL_NAME=/model
@@ -116,6 +120,7 @@ LAW_OC=
 Notes:
 
 - If `MODEL_URL_<selected-model>` is missing, the app falls back to `LLM_BASE_URL`.
+- `cohere`, `openai`, and `anthropic` are commercial API aliases for Cohere Command R+, OpenAI GPT-4o, and Claude Sonnet 4. They use `COHERE_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY`.
 - `USE_MCP=false` keeps the system fully local.
 - `USE_MCP=true` enables the optional MCP tool.
 - `USE_MCP` is the default mode on startup, but the Streamlit sidebar can override it at runtime.

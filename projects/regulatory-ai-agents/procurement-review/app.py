@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import streamlit as st
 
+from src.commercial_api import get_commercial_model_profile
 from src.config import (
     ENV_PATH,
     build_embeddings,
@@ -29,6 +30,14 @@ def format_reranker_label(reranker_key: str) -> str:
 
 def format_mode_label(mode_key: str) -> str:
   return "local + MCP" if mode_key == "local_mcp" else "local only"
+
+
+def format_llm_label(model_name: str) -> str:
+  settings = get_settings()
+  if settings.is_commercial_model(model_name):
+    profile = get_commercial_model_profile(model_name)
+    return f"{model_name} ({profile.model})"
+  return model_name
 
 
 def refresh_runtime_config() -> None:
@@ -82,11 +91,31 @@ def select_llm_model() -> str:
       options=options,
       index=options.index(st.session_state["selected_llm_model"]),
       key="selected_llm_model",
+      format_func=format_llm_label,
   )
 
 
-def select_runtime_mode() -> bool:
+def select_runtime_mode(selected_model: str) -> bool:
   settings = get_settings()
+  if settings.is_commercial_model(selected_model):
+    previous_mode = st.session_state.get("selected_runtime_mode")
+    st.session_state["selected_runtime_mode"] = "local_only"
+    st.sidebar.selectbox(
+        "Mode",
+        options=["local_only"],
+        index=0,
+        key="selected_runtime_mode",
+        format_func=format_mode_label,
+        disabled=True,
+        help=(
+            "Commercial API models keep ChromaDB and reranking local, then send "
+            "only the final answer prompt to the provider API."
+        ),
+    )
+    if previous_mode is not None and previous_mode != "local_only":
+      st.session_state.pop("last_response", None)
+    return False
+
   options = ["local_only", "local_mcp"]
   default_mode = "local_mcp" if settings.use_mcp else "local_only"
   previous_mode = st.session_state.get("selected_runtime_mode")
@@ -209,12 +238,18 @@ def build_pipeline(
     document_store: ProcurementVectorStore,
     regulations_store: ProcurementVectorStore,
 ) -> ProcurementRAGPipeline:
+  pipeline_settings = replace(
+      runtime_settings,
+      llm_model_name=selected_model,
+      use_mcp=runtime_settings.use_mcp
+      and not runtime_settings.is_commercial_model(selected_model),
+  )
   return ProcurementRAGPipeline(
       document_store=document_store,
       regulations_store=regulations_store,
       reranker=build_reranker(selected_reranker_key),
       llm=build_llm(selected_model),
-      settings=runtime_settings,
+      settings=pipeline_settings,
   )
 
 
@@ -321,19 +356,18 @@ def handle_query(
 def main() -> None:
   refresh_runtime_config()
   st.title("Procurement Review Agent")
-  st.caption("LangChain Agent + ChromaDB + optional korean-law-mcp + vLLM + Streamlit")
+  st.caption("LangChain Agent + ChromaDB + optional korean-law-mcp + LLM + Streamlit")
 
   selected_model = select_llm_model()
   selected_reranker_key = select_reranker()
-  runtime_settings = build_runtime_settings(select_runtime_mode())
-  document_store, regulations_store = get_vectorstores()
-  pipeline = build_pipeline(
+  use_mcp = select_runtime_mode(selected_model)
+  runtime_settings = build_runtime_settings(use_mcp)
+  runtime_settings = replace(
       runtime_settings,
-      selected_model,
-      selected_reranker_key,
-      document_store,
-      regulations_store,
+      llm_model_name=selected_model,
+      use_mcp=use_mcp and not runtime_settings.is_commercial_model(selected_model),
   )
+  document_store, regulations_store = get_vectorstores()
   render_sidebar(
       runtime_settings,
       selected_model,
@@ -341,6 +375,17 @@ def main() -> None:
       document_store,
       regulations_store,
   )
+  try:
+    pipeline = build_pipeline(
+        runtime_settings,
+        selected_model,
+        selected_reranker_key,
+        document_store,
+        regulations_store,
+    )
+  except ValueError as exc:
+    st.error(f"Runtime configuration error: {exc}")
+    st.stop()
 
   left, right = st.columns([1, 1.3], gap="large")
   with left:

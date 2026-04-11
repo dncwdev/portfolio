@@ -8,7 +8,14 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+from .commercial_api import (
+    CommercialChatModel,
+    get_commercial_model_profile,
+    is_commercial_model_alias,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -170,6 +177,8 @@ class Settings:
 
     def get_llm_base_url(self, model_name: str | None = None) -> str:
         selected_model = model_name or self.llm_model_name
+        if is_commercial_model_alias(selected_model):
+            return get_commercial_model_profile(selected_model).base_url
         if selected_model in self.llm_model_urls:
             return self.llm_model_urls[selected_model]
         if self.llm_base_url:
@@ -180,6 +189,9 @@ class Settings:
 
     def get_llm_api_base_url(self, model_name: str | None = None) -> str:
         return _normalize_openai_base_url(self.get_llm_base_url(model_name))
+
+    def is_commercial_model(self, model_name: str | None = None) -> bool:
+        return is_commercial_model_alias(model_name or self.llm_model_name)
 
     def get_reranker_profile(
         self,
@@ -296,7 +308,11 @@ def get_settings() -> Settings:
         for model_name in available_models
         if (model_url := _env_lookup(f"MODEL_URL_{model_name}"))
     }
-    if not llm_base_url and llm_model_name not in llm_model_urls:
+    if (
+        not llm_base_url
+        and llm_model_name not in llm_model_urls
+        and not is_commercial_model_alias(llm_model_name)
+    ):
         raise ValueError(
             f"Missing MODEL_URL_{llm_model_name} and LLM_BASE_URL fallback."
         )
@@ -363,9 +379,33 @@ def get_settings() -> Settings:
 
 
 @lru_cache(maxsize=16)
-def build_llm(model_name: str | None = None) -> ChatOpenAI:
+def build_llm(model_name: str | None = None) -> BaseChatModel:
     settings = get_settings()
     selected_model = model_name or settings.llm_model_name
+    if is_commercial_model_alias(selected_model):
+        profile = get_commercial_model_profile(selected_model)
+        api_key = _require_env(profile.api_key_env)
+        if selected_model == "openai":
+            return ChatOpenAI(
+                model=profile.model,
+                api_key=api_key,
+                base_url=profile.base_url,
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+                request_timeout=settings.request_timeout,
+                max_retries=2,
+                use_responses_api=False,
+            )
+        return CommercialChatModel(
+            api_mode=selected_model,
+            api_key=api_key,
+            base_url=profile.base_url,
+            model=profile.model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            request_timeout=settings.request_timeout,
+        )
+
     return ChatOpenAI(
         model=selected_model,
         api_key=settings.llm_api_key,

@@ -4,7 +4,6 @@ import argparse
 import csv
 import json
 import logging
-import os
 import re
 import sys
 import time
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
-from openai import APITimeoutError, OpenAI
+from openai import APITimeoutError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent_tools import EvidenceCollector, get_default_query_templates, retrieve_local_evidence
-from src.config import build_embeddings, build_reranker, get_settings
+from src.commercial_api import COMMERCIAL_MODELS, call_commercial_llm
+from src.config import build_embeddings, build_llm, build_reranker, get_settings
 from src.rag_pipeline import (
     ANSWER_PROMPT,
     NO_DOCUMENT_MESSAGE,
@@ -40,23 +40,6 @@ DEFAULT_DATASET_CANDIDATES = (
     EVAL_DIR / DEFAULT_DATASET_NAME,
     EVAL_DIR / "datasets" / DEFAULT_DATASET_NAME,
 )
-COMMERCIAL_MODELS = {
-    "cohere": {
-        "base_url": "https://api.cohere.ai/v1",
-        "api_key_env": "COHERE_API_KEY",
-        "model": "command-r-plus",
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "api_key_env": "OPENAI_API_KEY",
-        "model": "gpt-4o",
-    },
-    "anthropic": {
-        "base_url": "https://api.anthropic.com/v1",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-sonnet-4-20250514",
-    },
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +61,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-name",
         default=None,
-        help="Optional output label override. Defaults to the local model env or api-mode name.",
+        help=(
+            "Local model to run when --api-mode is not set. "
+            "With --api-mode, this only overrides the output label."
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -121,16 +107,16 @@ def resolve_dataset_path(explicit_path: Path | None) -> Path:
     )
 
 
-def derive_model_label(explicit_label: str | None, api_mode: str | None) -> str:
-    if explicit_label:
+def derive_model_label(
+    explicit_label: str | None,
+    api_mode: str | None,
+    local_model_name: str,
+) -> str:
+    if explicit_label and api_mode:
         return explicit_label
     if api_mode:
         return api_mode
-    return (
-        os.getenv("LLM_MODEL")
-        or os.getenv("LLM_MODEL_NAME")
-        or get_settings().llm_model_name
-    )
+    return local_model_name
 
 
 def slugify_model_label(value: str) -> str:
@@ -209,121 +195,6 @@ def run_with_retries(
             time.sleep(backoff_seconds)
     assert last_error is not None
     raise last_error
-
-
-def extract_openai_text(response: Any) -> str:
-    choices = getattr(response, "choices", None) or []
-    if not choices:
-        return ""
-    content = choices[0].message.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-            else:
-                text = getattr(item, "text", None) or getattr(item, "content", None)
-            if text:
-                parts.append(str(text))
-        return "\n".join(parts)
-    return str(content or "")
-
-
-def call_openai_compatible_api(
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    prompt: str,
-    max_tokens: int,
-    timeout: float,
-    temperature: float,
-) -> str:
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    return extract_openai_text(response).strip()
-
-
-def call_cohere_api(
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    prompt: str,
-    max_tokens: int,
-    timeout: float,
-    temperature: float,
-) -> str:
-    response = requests.post(
-        f"{base_url.rstrip('/')}/chat",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "message": prompt,
-            "stream": False,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "raw_prompting": True,
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("text"):
-        return str(payload["text"]).strip()
-    chat_history = payload.get("chat_history", [])
-    if chat_history:
-        last_message = chat_history[-1].get("message")
-        if last_message:
-            return str(last_message).strip()
-    return ""
-
-
-def call_commercial_llm(
-    *,
-    api_mode: str,
-    prompt: str,
-    max_tokens: int,
-    timeout: float,
-    temperature: float,
-) -> str:
-    api_config = COMMERCIAL_MODELS[api_mode]
-    api_key = os.getenv(api_config["api_key_env"])
-    if not api_key:
-        raise ValueError(
-            f"Missing required environment variable: {api_config['api_key_env']}"
-        )
-
-    if api_mode == "cohere":
-        return call_cohere_api(
-            base_url=api_config["base_url"],
-            api_key=api_key,
-            model=api_config["model"],
-            prompt=prompt,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            temperature=temperature,
-        )
-
-    return call_openai_compatible_api(
-        base_url=api_config["base_url"],
-        api_key=api_key,
-        model=api_config["model"],
-        prompt=prompt,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        temperature=temperature,
-    )
 
 
 def build_vectorstores(settings: Any) -> tuple[ProcurementVectorStore, ProcurementVectorStore]:
@@ -436,9 +307,15 @@ def main() -> None:
     args = parse_args()
     dataset_path = resolve_dataset_path(args.dataset_path)
     dataset_rows = load_dataset_rows(dataset_path, limit=args.limit)
-    runtime_settings = replace(get_settings(), use_mcp=False)
+    settings = get_settings()
+    local_model_name = args.model_name or settings.llm_model_name
+    runtime_settings = replace(
+        settings,
+        llm_model_name=local_model_name,
+        use_mcp=False,
+    )
     reranker_key = args.reranker_key or runtime_settings.default_reranker_key
-    model_label = derive_model_label(args.model_name, args.api_mode)
+    model_label = derive_model_label(args.model_name, args.api_mode, local_model_name)
     answers_path = resolve_answers_path(model_label)
     existing_results = [] if args.overwrite else load_existing_results(answers_path)
     existing_by_question = {
@@ -453,16 +330,18 @@ def main() -> None:
             document_store=document_store,
             regulations_store=regulations_store,
             reranker=reranker,
+            llm=build_llm(local_model_name),
             settings=runtime_settings,
         )
 
     ordered_results: list[dict[str, Any]] = []
     total_questions = len(dataset_rows)
     logger.info(
-        "Starting answer generation | dataset=%s | total=%s | model_label=%s | api_mode=%s",
+        "Starting answer generation | dataset=%s | total=%s | model_label=%s | local_model=%s | api_mode=%s",
         dataset_path,
         total_questions,
         model_label,
+        local_model_name if args.api_mode is None else "-",
         args.api_mode or "local",
     )
 
