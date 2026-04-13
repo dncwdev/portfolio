@@ -29,7 +29,11 @@ def format_reranker_label(reranker_key: str) -> str:
 
 
 def format_mode_label(mode_key: str) -> str:
-  return "local + MCP" if mode_key == "local_mcp" else "local only"
+  if mode_key == "local_mcp":
+    return "local + MCP"
+  if mode_key == "graphrag":
+    return "GraphRAG (Neo4j)"
+  return "local only"
 
 
 def format_llm_label(model_name: str) -> str:
@@ -116,7 +120,7 @@ def select_runtime_mode(selected_model: str) -> bool:
       st.session_state.pop("last_response", None)
     return False
 
-  options = ["local_only", "local_mcp"]
+  options = ["local_only", "local_mcp", "graphrag"]
   default_mode = "local_mcp" if settings.use_mcp else "local_only"
   previous_mode = st.session_state.get("selected_runtime_mode")
 
@@ -299,6 +303,18 @@ def render_source_section(title: str, sources: list) -> None:
       st.write(source.page_content)
 
 
+def render_graph_context_section(title: str, contexts: list[str]) -> None:
+  st.markdown(f"### {title}")
+  if not contexts:
+    st.info("GraphRAG 컨텍스트를 찾지 못했습니다.")
+    return
+
+  for index, context in enumerate(contexts, start=1):
+    preview = context.splitlines()[0] if context else f"context {index}"
+    with st.expander(preview):
+      st.write(context)
+
+
 def handle_query(
     pipeline: ProcurementRAGPipeline,
     runtime_settings,
@@ -336,7 +352,18 @@ def handle_query(
           "Running the evidence-gathering agent with "
           f"{format_reranker_label(st.session_state['selected_reranker_key'])}..."
       ):
-        st.session_state["last_response"] = pipeline.invoke(question.strip())
+        if st.session_state.get("selected_runtime_mode") == "graphrag":
+          from src.rag_graph import retrieve_and_answer
+
+          st.session_state["last_response"] = retrieve_and_answer(
+              question.strip(),
+              st.session_state.get(
+                  "selected_llm_model",
+                  runtime_settings.llm_model_name,
+              ),
+          )
+        else:
+          st.session_state["last_response"] = pipeline.invoke(question.strip())
     except Exception as exc:  # pragma: no cover - UI feedback
       st.error(f"Query failed: {exc}")
 
@@ -345,6 +372,11 @@ def handle_query(
     return
 
   st.markdown("### Compliance Review")
+  if isinstance(response, dict):
+    st.write(response.get("answer", ""))
+    render_graph_context_section("GraphRAG Context", response.get("contexts", []))
+    return
+
   if response.used_mcp:
     st.caption("This review used korean-law-mcp evidence in addition to local ChromaDB evidence.")
   st.write(response.answer)

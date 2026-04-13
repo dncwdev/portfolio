@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         help="Use a commercial API for the final answer step while keeping retrieval local.",
     )
     parser.add_argument(
+        "--model",
+        dest="model_name",
+        default=None,
+        help="Alias for --model-name.",
+    )
+    parser.add_argument(
         "--model-name",
         default=None,
         help=(
@@ -212,6 +218,17 @@ def build_vectorstores(settings: Any) -> tuple[ProcurementVectorStore, Procureme
     return document_store, regulations_store
 
 
+def serialize_context(document: Any) -> str:
+    metadata = getattr(document, "metadata", {}) or {}
+    source = metadata.get("source", "unknown")
+    page = metadata.get("page", "-")
+    source_group = metadata.get("source_group", "-")
+    return (
+        f"[source={source} page={page} group={source_group}]\n"
+        f"{document.page_content}"
+    )
+
+
 def build_context_only_response(
     *,
     question: str,
@@ -226,7 +243,7 @@ def build_context_only_response(
 
     if document_store.get_stats()["chunk_count"] == 0:
         return NO_DOCUMENT_MESSAGE, [], []
-    if regulations_store.get_stats()["chunk_count"] == 0 and not settings.use_mcp:
+    if regulations_store.get_stats()["chunk_count"] == 0:
         return NO_REGULATION_MESSAGE, [], []
 
     collector = EvidenceCollector()
@@ -269,7 +286,7 @@ def build_context_only_response(
 
 def build_record_from_pipeline_response(response: Any, ground_truth: str) -> dict[str, Any]:
     contexts = [
-        document.page_content
+        serialize_context(document)
         for document in [*response.regulation_sources, *response.document_sources]
     ]
     return {
@@ -289,7 +306,7 @@ def build_record_from_commercial_answer(
     ground_truth: str,
 ) -> dict[str, Any]:
     contexts = [
-        document.page_content for document in [*regulation_sources, *document_sources]
+        serialize_context(document) for document in [*regulation_sources, *document_sources]
     ]
     return {
         "question": question,
@@ -312,6 +329,7 @@ def main() -> None:
     runtime_settings = replace(
         settings,
         llm_model_name=local_model_name,
+        # Evaluation answers are generated from the local regulations collection only.
         use_mcp=False,
     )
     reranker_key = args.reranker_key or runtime_settings.default_reranker_key
@@ -325,7 +343,8 @@ def main() -> None:
     document_store, regulations_store = build_vectorstores(runtime_settings)
     reranker = build_reranker(reranker_key)
     local_pipeline = None
-    if args.api_mode is None:
+    use_graphrag = (args.model_name or "").strip().lower() == "graphrag"
+    if args.api_mode is None and not use_graphrag:
         local_pipeline = ProcurementRAGPipeline(
             document_store=document_store,
             regulations_store=regulations_store,
@@ -359,6 +378,17 @@ def main() -> None:
         started_at = time.perf_counter()
 
         def operation() -> dict[str, Any]:
+            if use_graphrag:
+                from src.rag_graph import retrieve_and_answer
+
+                graph_record = retrieve_and_answer(question, "graphrag")
+                return {
+                    "question": graph_record["question"],
+                    "answer": graph_record["answer"],
+                    "contexts": list(graph_record["contexts"]),
+                    "ground_truth": ground_truth,
+                }
+
             if local_pipeline is not None:
                 response = local_pipeline.invoke(question)
                 return build_record_from_pipeline_response(response, ground_truth)
@@ -395,6 +425,7 @@ def main() -> None:
             elapsed,
         )
 
+    save_results(answers_path, ordered_results)
     logger.info("Finished answer generation: %s", answers_path)
     print(f"answers_path={answers_path}")
     print(f"model_label={model_label}")
