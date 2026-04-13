@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Literal
 
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForRetrieverRun,
+    CallbackManagerForRetrieverRun,
+)
 from langchain_core.documents import Document
+from langchain_core.output_parsers import BaseOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, Field
+from langchain_classic.retrievers.multi_query import MultiQueryRetriever
+from pydantic import BaseModel, ConfigDict, Field
 
-from .config import Settings, get_settings
+from .config import Settings, build_llm, get_settings
 from .domain_queries import (
     DomainQueryTemplate,
     build_domain_query,
@@ -26,6 +35,61 @@ from .vectorstore import ProcurementVectorStore
 logger = logging.getLogger(__name__)
 
 LocalSearchScope = Literal["all", "documents", "regulations"]
+
+LEGAL_MULTI_QUERY_PROMPT = PromptTemplate(
+    input_variables=["question"],
+    template=(
+        "You rewrite Korean public-procurement legal search queries.\n"
+        "Return exactly 3 lines with no numbering, bullets, or commentary.\n"
+        "Line 1: the original user question verbatim.\n"
+        "Line 2: rewrite focused on law names, decree/rule names, and article numbers.\n"
+        "Line 3: a compact keyword query containing only law names, article numbers, and core compliance terms.\n"
+        "Input:\n{question}"
+    ),
+)
+
+
+class LegalMultiQueryOutputParser(BaseOutputParser[list[str]]):
+    def parse(self, text: str) -> list[str]:
+        lines: list[str] = []
+        seen: set[str] = set()
+
+        for raw_line in text.splitlines():
+            line = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", raw_line).strip()
+            if not line or line in seen:
+                continue
+            lines.append(line)
+            seen.add(line)
+            if len(lines) == 3:
+                break
+
+        return lines
+
+
+class ProcurementVectorStoreRetriever(BaseRetriever):
+    # MultiQueryRetriever needs a BaseRetriever wrapper around the existing vector store.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    vectorstore: ProcurementVectorStore
+    search_kwargs: dict[str, int] = Field(default_factory=dict)
+
+    def _get_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager: CallbackManagerForRetrieverRun,
+    ) -> list[Document]:
+        del run_manager
+        return self.vectorstore.similarity_search(query, k=self.search_kwargs.get("k"))
+
+    async def _aget_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager: AsyncCallbackManagerForRetrieverRun,
+    ) -> list[Document]:
+        del run_manager
+        return self.vectorstore.similarity_search(query, k=self.search_kwargs.get("k"))
 
 
 @dataclass
@@ -272,6 +336,7 @@ def retrieve_local_evidence(
             reranker=reranker,
             review_question=query,
             query_templates=selected_templates,
+            settings=runtime_settings,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
             rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
@@ -284,6 +349,7 @@ def retrieve_local_evidence(
             reranker=reranker,
             review_question=query,
             query_templates=selected_templates,
+            settings=runtime_settings,
             retrieval_top_k=runtime_settings.retrieval_top_k,
             rerank_top_k=rerank_limit,
             rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
@@ -391,6 +457,7 @@ def _retrieve_template_bundle(
     reranker: BaseReranker,
     review_question: str,
     query_templates: Sequence[DomainQueryTemplate],
+    settings: Settings,
     retrieval_top_k: int,
     rerank_top_k: int,
     rerank_relative_threshold: float,
@@ -399,14 +466,15 @@ def _retrieve_template_bundle(
 
     for query_template in query_templates:
         retrieval_query = build_domain_query(review_question, query_template)
-        # The reranker works better with a targeted domain template string than the full review question.
-        rerank_query = get_domain_rerank_query(query_template)
+        rerank_query = f"{review_question}\n{get_domain_rerank_query(query_template)}"
         reranked_documents = _retrieve_and_rerank(
             vectorstore=vectorstore,
             reranker=reranker,
             retrieval_query=retrieval_query,
             rerank_query=rerank_query,
+            review_question=review_question,
             query_template=query_template,
+            settings=settings,
             retrieval_top_k=retrieval_top_k,
             rerank_top_k=rerank_top_k,
             rerank_relative_threshold=rerank_relative_threshold,
@@ -456,12 +524,35 @@ def _retrieve_and_rerank(
     reranker: BaseReranker,
     retrieval_query: str,
     rerank_query: str,
+    review_question: str,
     query_template: DomainQueryTemplate,
+    settings: Settings,
     retrieval_top_k: int,
     rerank_top_k: int,
     rerank_relative_threshold: float,
 ) -> list[Document]:
-    retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
+    # Single-query baseline preserved for before/after comparison.
+    # retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
+    # gpt-oss is unstable on query-rewrite generation, so keep it on the
+    # deterministic single-query path for answer generation/evaluation.
+    if settings.llm_model_name.startswith("gpt-oss"):
+        retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
+        retrieved = [
+            Document(
+                page_content=document.page_content,
+                metadata={**document.metadata, "retrieval_mode": "single_query_model_override"},
+            )
+            for document in retrieved
+        ]
+    else:
+        retrieved = _retrieve_with_multi_query(
+            vectorstore=vectorstore,
+            review_question=review_question,
+            retrieval_query=retrieval_query,
+            query_template=query_template,
+            settings=settings,
+            retrieval_top_k=retrieval_top_k,
+        )
     if not retrieved:
         return []
 
@@ -470,7 +561,10 @@ def _retrieve_and_rerank(
         return []
 
     max_score = max(float(document.metadata.get("rerank_score", 0.0)) for document in reranked)
-    relative_cutoff = max_score * rerank_relative_threshold
+    # Relative-threshold baseline kept for before/after comparison.
+    # relative_cutoff = max_score * rerank_relative_threshold
+    # Switched to a fixed absolute cutoff so chunks must clear a stable rerank bar.
+    absolute_cutoff = 0.1
     kept_documents: list[Document] = []
 
     for document in reranked:
@@ -479,21 +573,21 @@ def _retrieve_and_rerank(
         metadata["retrieval_query"] = retrieval_query
         metadata["rerank_query"] = rerank_query
         metadata["rerank_max_score"] = max_score
-        metadata["rerank_relative_cutoff"] = relative_cutoff
+        metadata["rerank_score_cutoff"] = absolute_cutoff
         normalized_document = Document(
             page_content=document.page_content,
             metadata=metadata,
         )
 
-        if score < relative_cutoff:
+        if score < absolute_cutoff:
             logger.info(
-                "Excluded chunk below relative rerank threshold %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f | chunk_id=%s | source=%s | page=%s | score=%.4f",
-                rerank_relative_threshold,
+                "Excluded chunk below absolute rerank cutoff %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f | chunk_id=%s | source=%s | page=%s | score=%.4f",
+                absolute_cutoff,
                 vectorstore.collection_name,
                 query_template,
                 rerank_query,
                 max_score,
-                relative_cutoff,
+                absolute_cutoff,
                 metadata.get("chunk_id", "unknown"),
                 metadata.get("source", "unknown"),
                 metadata.get("page", "-"),
@@ -504,16 +598,102 @@ def _retrieve_and_rerank(
 
     if not kept_documents:
         logger.warning(
-            "No chunks survived relative rerank threshold %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f",
-            rerank_relative_threshold,
+            "No chunks survived absolute rerank cutoff %.2f | collection=%s | template=%s | rerank_query=%s | max_score=%.4f | cutoff=%.4f",
+            absolute_cutoff,
             vectorstore.collection_name,
             query_template,
             rerank_query,
             max_score,
-            relative_cutoff,
+            absolute_cutoff,
         )
 
     return kept_documents[:rerank_top_k]
+
+
+def _retrieve_with_multi_query(
+    *,
+    vectorstore: ProcurementVectorStore,
+    review_question: str,
+    retrieval_query: str,
+    query_template: DomainQueryTemplate,
+    settings: Settings,
+    retrieval_top_k: int,
+) -> list[Document]:
+    query_generation_llm = build_llm(settings.llm_model_name).bind(
+        max_tokens=256,
+        temperature=0,
+    )
+    base_retriever = ProcurementVectorStoreRetriever(
+        vectorstore=vectorstore,
+        search_kwargs={"k": retrieval_top_k},
+    )
+    multi_query_retriever = MultiQueryRetriever(
+        retriever=base_retriever,
+        llm_chain=LEGAL_MULTI_QUERY_PROMPT | query_generation_llm | LegalMultiQueryOutputParser(),
+        include_original=False,
+        verbose=False,
+    )
+    multi_query_input = _build_multi_query_input(
+        review_question=review_question,
+        retrieval_query=retrieval_query,
+        query_template=query_template,
+    )
+    try:
+        retrieved = multi_query_retriever.invoke(multi_query_input)
+        return _deduplicate_multi_query_results(retrieved, limit=retrieval_top_k)
+    except Exception as exc:
+        # Some local OpenAI-compatible servers fail while generating rewrite queries.
+        logger.warning(
+            "Multi-query retrieval failed; falling back to single-query retrieval | collection=%s | template=%s | error=%s",
+            vectorstore.collection_name,
+            query_template,
+            exc,
+        )
+        fallback = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
+        normalized: list[Document] = []
+        for document in fallback:
+            metadata = dict(document.metadata)
+            metadata["retrieval_mode"] = "single_query_fallback"
+            normalized.append(Document(page_content=document.page_content, metadata=metadata))
+        return normalized
+
+
+def _build_multi_query_input(
+    *,
+    review_question: str,
+    retrieval_query: str,
+    query_template: DomainQueryTemplate,
+) -> str:
+    del retrieval_query, query_template
+    return review_question.strip()
+
+
+def _deduplicate_multi_query_results(
+    documents: Sequence[Document],
+    *,
+    limit: int,
+) -> list[Document]:
+    deduplicated: dict[str, Document] = {}
+
+    for document in documents:
+        key = _document_result_key(document)
+        existing = deduplicated.get(key)
+        current_score = float(document.metadata.get("retrieval_score", 0.0))
+        existing_score = float(existing.metadata.get("retrieval_score", 0.0)) if existing else float("-inf")
+
+        metadata = dict(document.metadata)
+        metadata["retrieval_mode"] = "multi_query"
+        normalized = Document(page_content=document.page_content, metadata=metadata)
+
+        if existing is None or current_score > existing_score:
+            deduplicated[key] = normalized
+
+    ranked_documents = sorted(
+        deduplicated.values(),
+        key=lambda item: float(item.metadata.get("retrieval_score", 0.0)),
+        reverse=True,
+    )
+    return ranked_documents[:limit]
 
 
 def _document_result_key(document: Document) -> str:
