@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from langchain.agents import create_agent
+try:
+  from langchain.agents import create_agent
+except ImportError:  # pragma: no cover - depends on installed langchain version
+  create_agent = None
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -200,6 +203,9 @@ class ProcurementRAGPipeline:
       question: str,
       collector: EvidenceCollector,
   ) -> None:
+    if create_agent is None:
+      return
+
     tools = build_agent_tools(
         document_store=self.document_store,
         regulations_store=self.regulations_store,

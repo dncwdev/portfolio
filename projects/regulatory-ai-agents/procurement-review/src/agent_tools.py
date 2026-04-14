@@ -16,7 +16,10 @@ from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool, tool
-from langchain_classic.retrievers.multi_query import MultiQueryRetriever
+try:
+    from langchain_classic.retrievers.multi_query import MultiQueryRetriever
+except ImportError:  # pragma: no cover - depends on installed langchain variant
+    from langchain.retrievers.multi_query import MultiQueryRetriever
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings, build_llm, get_settings
@@ -27,7 +30,11 @@ from .domain_queries import (
     get_domain_query_templates,
     normalize_domain_query_templates,
 )
-from .mcp_client import KoreanLawMCPClient, KoreanLawSearchType
+try:
+    from .mcp_client import KoreanLawMCPClient, KoreanLawSearchType
+except ImportError:  # pragma: no cover - depends on optional MCP dependencies
+    KoreanLawMCPClient = None
+    KoreanLawSearchType = Literal["law", "precedent", "interpretation", "all"]
 from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
 
@@ -244,7 +251,11 @@ def build_agent_tools(
     question_context: str = "",
 ) -> list[BaseTool]:
     runtime_settings = settings or get_settings()
-    mcp_client = KoreanLawMCPClient(settings=runtime_settings)
+    mcp_client = (
+        KoreanLawMCPClient(settings=runtime_settings)
+        if runtime_settings.use_mcp and KoreanLawMCPClient is not None
+        else None
+    )
 
     @tool("search_local_procurement_context", args_schema=LocalSearchInput)
     def search_local_procurement_context(
@@ -274,7 +285,7 @@ def build_agent_tools(
 
     tools: list[BaseTool] = [search_local_procurement_context]
 
-    if runtime_settings.use_mcp:
+    if runtime_settings.use_mcp and mcp_client is not None:
 
         @tool("search_korean_law_mcp", args_schema=KoreanLawMCPInput)
         def search_korean_law_mcp(

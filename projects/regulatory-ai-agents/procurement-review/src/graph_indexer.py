@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +21,12 @@ logger = logging.getLogger(__name__)
 GRAPH_META_NAME = "procurement_graphrag"
 GRAPH_PROJECTION_NAME = "procurement_graphrag_entities"
 DEFAULT_GRAPHRAG_EXTRACT_MODEL = "qwen3.5-35b-a3b"
+DEFAULT_INDEX_BATCH_SIZE = 25
+DEFAULT_EXTRACT_MAX_WORKERS = max(
+    1,
+    int((os.getenv("GRAPHRAG_EXTRACT_WORKERS", "4") or "4").strip() or "4"),
+)
+GRAPH_SOURCE_SCOPE = "regulations_only"
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", flags=re.DOTALL)
 
 ENTITY_EXTRACTION_PROMPT = """
@@ -147,6 +155,7 @@ class GraphIndexer:
             raise GraphIndexerError(f"Failed to create Neo4j driver: {exc}") from exc
 
         self.extract_llm = build_llm(self.extract_model_name)
+        self._thread_local = threading.local()
 
     def __enter__(self) -> GraphIndexer:
         return self
@@ -167,7 +176,7 @@ class GraphIndexer:
             return {"entities": [], "relations": []}
 
         raw_response = coerce_message_text(
-            self.extract_llm.invoke(ENTITY_EXTRACTION_PROMPT.format(text=clipped_text))
+            self._get_extract_llm().invoke(ENTITY_EXTRACTION_PROMPT.format(text=clipped_text))
         )
         payload = self._safe_json_loads(raw_response)
         return self._normalize_graph_payload(payload)
@@ -178,33 +187,30 @@ class GraphIndexer:
         regulations_store: ProcurementVectorStore,
         *,
         force: bool = False,
+        batch_size: int = DEFAULT_INDEX_BATCH_SIZE,
     ) -> dict[str, Any]:
+        batch_size = max(1, int(batch_size or DEFAULT_INDEX_BATCH_SIZE))
+
         with self.driver.session() as session:
             self._verify_connection(session)
             self._ensure_constraints(session)
-            if not force and self._graph_index_exists(session):
+            meta_state = self._get_graph_meta_state(session)
+            if (
+                not force
+                and meta_state
+                and str(meta_state.get("status", "")).strip().lower() == "ready"
+            ):
                 logger.info("GraphRAG index already exists in Neo4j. Skipping indexing.")
-                meta = session.run(
-                    """
-                    MATCH (meta:GraphIndexMeta {name: $name})
-                    RETURN meta.status AS status,
-                           meta.chunk_count AS chunk_count,
-                           meta.entity_count AS entity_count,
-                           meta.community_count AS community_count,
-                           meta.algorithm AS algorithm
-                    LIMIT 1
-                    """,
-                    name=GRAPH_META_NAME,
-                ).single()
                 return {
-                    "status": (meta["status"] if meta else "skipped"),
-                    "chunk_count": int(meta["chunk_count"] or 0) if meta else 0,
-                    "entity_count": int(meta["entity_count"] or 0) if meta else 0,
-                    "community_count": int(meta["community_count"] or 0) if meta else 0,
-                    "algorithm": meta["algorithm"] if meta else "unknown",
+                    "status": str(meta_state.get("status", "skipped")),
+                    "chunk_count": int(meta_state.get("chunk_count", 0) or 0),
+                    "entity_count": int(meta_state.get("entity_count", 0) or 0),
+                    "community_count": int(meta_state.get("community_count", 0) or 0),
+                    "algorithm": str(meta_state.get("algorithm", "unknown")),
                 }
 
         chunk_records = self._load_chunks(document_store, regulations_store)
+        total_chunks = len(chunk_records)
         if not chunk_records:
             logger.warning("No Chroma chunks were found for GraphRAG indexing.")
             with self.driver.session() as session:
@@ -215,6 +221,9 @@ class GraphIndexer:
                     entity_count=0,
                     community_count=0,
                     algorithm="none",
+                    total_chunks=0,
+                    processed_chunks=0,
+                    last_error=None,
                 )
             return {
                 "status": "empty",
@@ -224,41 +233,109 @@ class GraphIndexer:
                 "algorithm": "none",
             }
 
-        extracted_payloads: list[tuple[ChunkRecord, dict[str, list[dict[str, str]]]]] = []
-        for index, chunk in enumerate(chunk_records, start=1):
-            payload = self.extract_graph_payload(chunk.text)
-            extracted_payloads.append((chunk, payload))
-            if index % 50 == 0:
-                logger.info("GraphRAG extraction progress: %s/%s chunks", index, len(chunk_records))
-
         with self.driver.session() as session:
             if force:
                 self._clear_existing_graph(session)
-
-            for chunk, payload in extracted_payloads:
-                self._upsert_chunk_graph(session, chunk, payload)
-
-            algorithm = self._run_community_detection(session)
-            community_count = self._write_community_summaries(session, algorithm)
-            counts = session.run(
-                """
-                OPTIONAL MATCH (chunk:Chunk)
-                WITH count(chunk) AS chunk_count
-                OPTIONAL MATCH (entity:Entity)
-                WITH chunk_count, count(entity) AS entity_count
-                RETURN chunk_count, entity_count
-                """
-            ).single()
-            chunk_count = int(counts["chunk_count"] or 0) if counts else 0
-            entity_count = int(counts["entity_count"] or 0) if counts else 0
             self._write_meta(
                 session,
-                status="ready",
-                chunk_count=chunk_count,
-                entity_count=entity_count,
-                community_count=community_count,
-                algorithm=algorithm,
+                status="in_progress",
+                chunk_count=0,
+                entity_count=0,
+                community_count=0,
+                algorithm="pending",
+                total_chunks=total_chunks,
+                processed_chunks=0,
+                last_error=None,
             )
+
+        with self.driver.session() as session:
+            existing_chunk_ids = set() if force else self._load_existing_chunk_ids(session)
+            existing_counts = self._get_graph_counts(session)
+            self._write_meta(
+                session,
+                status="in_progress",
+                chunk_count=existing_counts["chunk_count"],
+                entity_count=existing_counts["entity_count"],
+                community_count=0,
+                algorithm="pending",
+                total_chunks=total_chunks,
+                processed_chunks=existing_counts["chunk_count"],
+                last_error=None,
+            )
+
+        pending_chunks = [
+            chunk for chunk in chunk_records if chunk.chunk_id not in existing_chunk_ids
+        ]
+        logger.info(
+            "GraphRAG batch indexing starting | total=%s | existing=%s | pending=%s | batch_size=%s | workers=%s",
+            total_chunks,
+            len(existing_chunk_ids),
+            len(pending_chunks),
+            batch_size,
+            DEFAULT_EXTRACT_MAX_WORKERS,
+        )
+
+        try:
+            for batch_start in range(0, len(pending_chunks), batch_size):
+                batch = pending_chunks[batch_start : batch_start + batch_size]
+                extracted_payloads = self._extract_batch_payloads(batch)
+
+                with self.driver.session() as session:
+                    for chunk, payload in extracted_payloads:
+                        self._upsert_chunk_graph(session, chunk, payload)
+
+                    counts = self._get_graph_counts(session)
+                    self._write_meta(
+                        session,
+                        status="in_progress",
+                        chunk_count=counts["chunk_count"],
+                        entity_count=counts["entity_count"],
+                        community_count=0,
+                        algorithm="pending",
+                        total_chunks=total_chunks,
+                        processed_chunks=counts["chunk_count"],
+                        last_error=None,
+                    )
+
+                logger.info(
+                    "GraphRAG batch indexed | persisted_chunks=%s/%s | entities=%s",
+                    counts["chunk_count"],
+                    total_chunks,
+                    counts["entity_count"],
+                )
+
+            with self.driver.session() as session:
+                algorithm = self._run_community_detection(session)
+                community_count = self._write_community_summaries(session, algorithm)
+                counts = self._get_graph_counts(session)
+                chunk_count = counts["chunk_count"]
+                entity_count = counts["entity_count"]
+                self._write_meta(
+                    session,
+                    status="ready",
+                    chunk_count=chunk_count,
+                    entity_count=entity_count,
+                    community_count=community_count,
+                    algorithm=algorithm,
+                    total_chunks=total_chunks,
+                    processed_chunks=chunk_count,
+                    last_error=None,
+                )
+        except Exception as exc:
+            with self.driver.session() as session:
+                counts = self._get_graph_counts(session)
+                self._write_meta(
+                    session,
+                    status="failed",
+                    chunk_count=counts["chunk_count"],
+                    entity_count=counts["entity_count"],
+                    community_count=counts["community_count"],
+                    algorithm="failed",
+                    total_chunks=total_chunks,
+                    processed_chunks=counts["chunk_count"],
+                    last_error=str(exc),
+                )
+            raise
 
         logger.info(
             "GraphRAG indexing complete | chunks=%s | entities=%s | communities=%s | algorithm=%s",
@@ -280,10 +357,13 @@ class GraphIndexer:
         document_store: ProcurementVectorStore,
         regulations_store: ProcurementVectorStore,
     ) -> list[ChunkRecord]:
-        chunks: list[ChunkRecord] = []
-        chunks.extend(self._read_collection_chunks(document_store, source_group="document"))
-        chunks.extend(self._read_collection_chunks(regulations_store, source_group="regulation"))
-        return chunks
+        logger.info(
+            "GraphRAG source scope is '%s'; skipping document collection '%s' and indexing only regulations collection '%s'.",
+            GRAPH_SOURCE_SCOPE,
+            document_store.collection_name,
+            regulations_store.collection_name,
+        )
+        return self._read_collection_chunks(regulations_store, source_group="regulation")
 
     def _read_collection_chunks(
         self,
@@ -332,19 +412,59 @@ class GraphIndexer:
         except Exception as exc:  # pragma: no cover - depends on external Neo4j runtime
             raise GraphIndexerError(f"Failed to connect to Neo4j: {exc}") from exc
 
-    def _graph_index_exists(self, session) -> bool:
+    def _get_graph_meta_state(self, session) -> dict[str, Any] | None:
         record = session.run(
             """
             MATCH (meta:GraphIndexMeta {name: $name})
-            RETURN count(meta) AS meta_count
+            RETURN meta.status AS status,
+                   coalesce(meta.chunk_count, 0) AS chunk_count,
+                   coalesce(meta.entity_count, 0) AS entity_count,
+                   coalesce(meta.community_count, 0) AS community_count,
+                   coalesce(meta.algorithm, 'unknown') AS algorithm,
+                   coalesce(meta.total_chunks, 0) AS total_chunks,
+                   coalesce(meta.processed_chunks, 0) AS processed_chunks,
+                   meta.last_error AS last_error
+            LIMIT 1
             """,
             name=GRAPH_META_NAME,
         ).single()
-        if record and int(record["meta_count"] or 0) > 0:
-            return True
+        if not record:
+            return None
 
-        chunk_record = session.run("MATCH (chunk:Chunk) RETURN count(chunk) AS chunk_count").single()
-        return bool(chunk_record and int(chunk_record["chunk_count"] or 0) > 0)
+        return {
+            "status": record["status"],
+            "chunk_count": int(record["chunk_count"] or 0),
+            "entity_count": int(record["entity_count"] or 0),
+            "community_count": int(record["community_count"] or 0),
+            "algorithm": record["algorithm"],
+            "total_chunks": int(record["total_chunks"] or 0),
+            "processed_chunks": int(record["processed_chunks"] or 0),
+            "last_error": record["last_error"],
+        }
+
+    def _load_existing_chunk_ids(self, session) -> set[str]:
+        return {
+            str(record["chunk_id"])
+            for record in session.run("MATCH (chunk:Chunk) RETURN chunk.chunk_id AS chunk_id")
+            if record["chunk_id"] is not None
+        }
+
+    def _get_graph_counts(self, session) -> dict[str, int]:
+        record = session.run(
+            """
+            OPTIONAL MATCH (chunk:Chunk)
+            WITH count(chunk) AS chunk_count
+            OPTIONAL MATCH (entity:Entity)
+            WITH chunk_count, count(entity) AS entity_count
+            OPTIONAL MATCH (community:Community)
+            RETURN chunk_count, entity_count, count(community) AS community_count
+            """
+        ).single()
+        return {
+            "chunk_count": int(record["chunk_count"] or 0) if record else 0,
+            "entity_count": int(record["entity_count"] or 0) if record else 0,
+            "community_count": int(record["community_count"] or 0) if record else 0,
+        }
 
     def _clear_existing_graph(self, session) -> None:
         session.run("MATCH (meta:GraphIndexMeta {name: $name}) DETACH DELETE meta", name=GRAPH_META_NAME).consume()
@@ -683,16 +803,24 @@ class GraphIndexer:
         entity_count: int,
         community_count: int,
         algorithm: str,
+        total_chunks: int | None = None,
+        processed_chunks: int | None = None,
+        last_error: str | None = None,
     ) -> None:
         session.run(
             """
             MERGE (meta:GraphIndexMeta {name: $name})
+            ON CREATE SET meta.created_at = datetime()
             SET meta.status = $status,
                 meta.chunk_count = $chunk_count,
                 meta.entity_count = $entity_count,
                 meta.community_count = $community_count,
                 meta.algorithm = $algorithm,
                 meta.extract_model = $extract_model,
+                meta.source_scope = $source_scope,
+                meta.total_chunks = $total_chunks,
+                meta.processed_chunks = $processed_chunks,
+                meta.last_error = $last_error,
                 meta.updated_at = datetime()
             """,
             name=GRAPH_META_NAME,
@@ -702,6 +830,10 @@ class GraphIndexer:
             community_count=community_count,
             algorithm=algorithm,
             extract_model=self.extract_model_name,
+            source_scope=GRAPH_SOURCE_SCOPE,
+            total_chunks=total_chunks,
+            processed_chunks=processed_chunks,
+            last_error=last_error,
         ).consume()
 
     def _safe_json_loads(self, raw_text: str) -> dict[str, Any]:
@@ -786,6 +918,40 @@ class GraphIndexer:
         relation_type = re.sub(r"[^a-z0-9_]+", "_", relation_type)
         return relation_type.strip("_") or "related"
 
+    def _get_extract_llm(self):
+        llm = getattr(self._thread_local, "extract_llm", None)
+        if llm is None:
+            if threading.current_thread() is threading.main_thread():
+                llm = self.extract_llm
+            else:
+                llm = build_llm(self.extract_model_name)
+            self._thread_local.extract_llm = llm
+        return llm
+
+    def _extract_batch_payloads(
+        self,
+        batch: list[ChunkRecord],
+    ) -> list[tuple[ChunkRecord, dict[str, list[dict[str, str]]]]]:
+        if not batch:
+            return []
+
+        max_workers = max(1, min(DEFAULT_EXTRACT_MAX_WORKERS, len(batch)))
+        if max_workers == 1:
+            return [(chunk, self.extract_graph_payload(chunk.text)) for chunk in batch]
+
+        results: list[tuple[ChunkRecord, dict[str, list[dict[str, str]]]] | None] = [None] * len(batch)
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="graphrag-extract") as executor:
+            future_map = {
+                executor.submit(self.extract_graph_payload, chunk.text): index
+                for index, chunk in enumerate(batch)
+            }
+            for future in as_completed(future_map):
+                index = future_map[future]
+                chunk = batch[index]
+                results[index] = (chunk, future.result())
+
+        return [result for result in results if result is not None]
+
 
 def ensure_graph_index(
     *,
@@ -793,6 +959,7 @@ def ensure_graph_index(
     regulations_store: ProcurementVectorStore | None = None,
     extract_model_name: str | None = None,
     force: bool = False,
+    batch_size: int = DEFAULT_INDEX_BATCH_SIZE,
 ) -> dict[str, Any]:
     if document_store is None or regulations_store is None:
         document_store, regulations_store = build_default_vectorstores()
@@ -802,6 +969,7 @@ def ensure_graph_index(
             document_store,
             regulations_store,
             force=force,
+            batch_size=batch_size,
         )
 
 
@@ -812,6 +980,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Delete existing GraphRAG nodes and rebuild the graph index.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_INDEX_BATCH_SIZE,
+        help=f"Number of chunks to extract and persist per batch (default: {DEFAULT_INDEX_BATCH_SIZE}).",
+    )
     return parser.parse_args()
 
 
@@ -821,7 +995,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     args = parse_args()
-    result = ensure_graph_index(force=args.force)
+    result = ensure_graph_index(force=args.force, batch_size=args.batch_size)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
