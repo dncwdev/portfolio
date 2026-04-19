@@ -5,7 +5,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
@@ -103,10 +103,126 @@ class ProcurementVectorStoreRetriever(BaseRetriever):
 class EvidenceCollector:
     regulation_sources: list[Document] = field(default_factory=list)
     document_sources: list[Document] = field(default_factory=list)
+    trace: dict[str, Any] = field(default_factory=dict, repr=False)
     _regulation_keys: set[str] = field(default_factory=set, init=False, repr=False)
     _document_keys: set[str] = field(default_factory=set, init=False, repr=False)
     _regulation_counter: int = field(default=0, init=False, repr=False)
     _document_counter: int = field(default=0, init=False, repr=False)
+
+    def init_trace(self, *, question: str, use_mcp: bool) -> None:
+        self.trace = {
+            "question": question,
+            "use_mcp": use_mcp,
+            "agent_started": False,
+            "agent_loop_entered": False,
+            "agent_available_tools": [],
+            "agent_tool_calls": [],
+            "agent_error": "",
+            "agent_unavailable_reason": "",
+            "mcp_tool_available": False,
+            "mcp_attempted": False,
+            "mcp_succeeded": False,
+            "mcp_error": "",
+            "mcp_result_count": 0,
+            "mcp_sources": [],
+            "mcp_preflight_attempt_count": 0,
+            "mcp_preflight_queries": [],
+            "forced_mcp_preflight": False,
+            "forced_mcp_reason": None,
+            "forced_mcp_query": None,
+            "forced_mcp_result_origin": None,
+            "local_retrieval_events": [],
+            "local_retrieval_query_count": 0,
+            "final_chat_completion_calls": 0,
+            "fallback_to_local": False,
+        }
+
+    def record_agent_started(self, *, available_tools: Sequence[str]) -> None:
+        self.trace["agent_started"] = True
+        self.trace["agent_available_tools"] = list(available_tools)
+        self.trace["mcp_tool_available"] = "search_korean_law_mcp" in available_tools
+
+    def record_agent_tool_call(self, tool_name: str) -> None:
+        self.trace.setdefault("agent_tool_calls", []).append(tool_name)
+
+    def record_agent_error(self, error: Exception) -> None:
+        self.trace["agent_error"] = f"{type(error).__name__}: {error}"
+
+    def record_agent_unavailable(self, reason: str) -> None:
+        self.trace["agent_unavailable_reason"] = reason
+
+    def record_mcp_attempt(
+        self,
+        *,
+        tool_name: str,
+        search_type: KoreanLawSearchType,
+        query: str | None,
+        article: str | None,
+        document_id: str | None,
+        limit: int,
+    ) -> None:
+        self.trace["mcp_attempted"] = True
+        if tool_name == "forced_mcp_preflight":
+            self.trace["mcp_preflight_attempt_count"] = (
+                int(self.trace.get("mcp_preflight_attempt_count", 0)) + 1
+            )
+            self.trace.setdefault("mcp_preflight_queries", []).append(query)
+        self.trace.setdefault("mcp_requests", []).append(
+            {
+                "tool_name": tool_name,
+                "search_type": search_type,
+                "query": query,
+                "article": article,
+                "document_id": document_id,
+                "limit": limit,
+            }
+        )
+
+    def record_mcp_success(self, *, documents: Sequence[Document]) -> None:
+        self.trace["mcp_succeeded"] = bool(documents)
+        self.trace["mcp_error"] = ""
+        self.trace["mcp_result_count"] = len(documents)
+        self.trace["mcp_sources"] = [
+            {
+                "source": str(document.metadata.get("source", "unknown")),
+                "page": str(document.metadata.get("page", "-")),
+                "mcp_tool": str(document.metadata.get("mcp_tool", "")),
+            }
+            for document in documents
+        ]
+
+    def record_mcp_error(self, error: Exception) -> None:
+        self.trace["mcp_attempted"] = True
+        self.trace["mcp_error"] = f"{type(error).__name__}: {error}"
+
+    def record_local_retrieval(
+        self,
+        *,
+        trigger: str,
+        scope: LocalSearchScope,
+        query_templates: Sequence[str],
+        query_count: int,
+        regulation_count: int,
+        document_count: int,
+    ) -> None:
+        self.trace["local_retrieval_query_count"] = (
+            int(self.trace.get("local_retrieval_query_count", 0)) + query_count
+        )
+        self.trace.setdefault("local_retrieval_events", []).append(
+            {
+                "trigger": trigger,
+                "scope": scope,
+                "query_templates": list(query_templates),
+                "query_count": query_count,
+                "regulation_count": regulation_count,
+                "document_count": document_count,
+                "collector_regulation_total": len(self.regulation_sources),
+                "collector_document_total": len(self.document_sources),
+            }
+        )
+
+    def record_fallback_to_local(self, fallback: bool) -> None:
+        self.trace["fallback_to_local"] = bool(fallback)
 
     def add_regulation_documents(self, documents: Sequence[Document]) -> list[Document]:
         return self._add_documents(documents, group="regulation")
@@ -264,6 +380,7 @@ def build_agent_tools(
         top_k: int = 5,
     ) -> str:
         """Search local ChromaDB with one predefined procurement-review domain query template."""
+        collector.record_agent_tool_call("search_local_procurement_context")
         regulation_sources, document_sources = retrieve_local_evidence(
             query=question_context,
             scope=scope,
@@ -274,6 +391,7 @@ def build_agent_tools(
             collector=collector,
             settings=runtime_settings,
             query_templates=(query_template,),
+            trigger="agent_tool",
         )
         return format_local_evidence(
             review_question=question_context,
@@ -296,6 +414,15 @@ def build_agent_tools(
             limit: int = 5,
         ) -> str:
             """Search the korean-law-mcp server for laws, articles, precedents, or interpretations."""
+            collector.record_agent_tool_call("search_korean_law_mcp")
+            collector.record_mcp_attempt(
+                tool_name="search_korean_law_mcp",
+                search_type=search_type,
+                query=query,
+                article=article,
+                document_id=document_id,
+                limit=limit,
+            )
             try:
                 documents = mcp_client.search_documents(
                     search_type=search_type,
@@ -305,8 +432,10 @@ def build_agent_tools(
                     limit=limit,
                 )
             except Exception as exc:
+                collector.record_mcp_error(exc)
                 return f"MCP 법령 검색을 실행하지 못했습니다. 오류: {exc}"
 
+            collector.record_mcp_success(documents=documents)
             regulation_sources = collector.add_regulation_documents(documents)
             return format_regulation_evidence(
                 review_question=query or document_id or "",
@@ -331,6 +460,7 @@ def retrieve_local_evidence(
     collector: EvidenceCollector,
     settings: Settings | None = None,
     query_templates: Sequence[str] | None = None,
+    trigger: str = "pipeline",
 ) -> tuple[list[Document], list[Document]]:
     runtime_settings = settings or get_settings()
     rerank_limit = max(1, min(top_k, runtime_settings.rerank_top_k))
@@ -340,6 +470,7 @@ def retrieve_local_evidence(
 
     regulation_sources: list[Document] = []
     document_sources: list[Document] = []
+    local_query_count = 0
 
     if scope in {"all", "regulations"}:
         local_regulations = _retrieve_template_bundle(
@@ -353,6 +484,7 @@ def retrieve_local_evidence(
             rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
         )
         regulation_sources = collector.add_regulation_documents(local_regulations)
+        local_query_count += len(selected_templates)
 
     if scope in {"all", "documents"}:
         local_documents = _retrieve_template_bundle(
@@ -366,6 +498,16 @@ def retrieve_local_evidence(
             rerank_relative_threshold=runtime_settings.rerank_relative_threshold,
         )
         document_sources = collector.add_document_documents(local_documents)
+        local_query_count += len(selected_templates)
+
+    collector.record_local_retrieval(
+        trigger=trigger,
+        scope=scope,
+        query_templates=selected_templates,
+        query_count=local_query_count,
+        regulation_count=len(regulation_sources),
+        document_count=len(document_sources),
+    )
 
     return regulation_sources, document_sources
 
@@ -544,14 +686,21 @@ def _retrieve_and_rerank(
 ) -> list[Document]:
     # Single-query baseline preserved for before/after comparison.
     # retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
-    # gpt-oss is unstable on query-rewrite generation, so keep it on the
-    # deterministic single-query path for answer generation/evaluation.
-    if settings.llm_model_name.startswith("gpt-oss"):
+    # MCP-enabled runs keep local retrieval on the deterministic single-query
+    # path so MCP failures do not fan out into query-rewrite loops.
+    if settings.use_mcp or settings.llm_model_name.startswith("gpt-oss"):
         retrieved = vectorstore.similarity_search(retrieval_query, k=retrieval_top_k)
         retrieved = [
             Document(
                 page_content=document.page_content,
-                metadata={**document.metadata, "retrieval_mode": "single_query_model_override"},
+                metadata={
+                    **document.metadata,
+                    "retrieval_mode": (
+                        "single_query_mcp_mode"
+                        if settings.use_mcp
+                        else "single_query_model_override"
+                    ),
+                },
             )
             for document in retrieved
         ]

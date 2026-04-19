@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import logging
+from pathlib import Path
 import re
 
 try:
@@ -20,8 +23,16 @@ from .agent_tools import (
 )
 from .config import Settings, build_llm, get_settings
 from .domain_queries import format_domain_query_template_guide
+try:
+  from .mcp_client import KoreanLawMCPClient
+except ImportError:  # pragma: no cover - depends on optional MCP dependencies
+  KoreanLawMCPClient = None
 from .reranker import BaseReranker
 from .vectorstore import ProcurementVectorStore
+
+
+logger = logging.getLogger(__name__)
+TRACE_LOG_PATH = Path(__file__).resolve().parents[1] / "logs" / "mcp_trace.jsonl"
 
 
 THINK_TAG_CLOSE_RE = re.compile(r"<\s*/\s*think\s*>", flags=re.IGNORECASE)
@@ -32,6 +43,19 @@ THINKING_LIKE_START_RE = re.compile(
 THINKING_PROCESS_LINE_RE = re.compile(
     r"(?im)^\s*Thinking Process:\s*$"
 )
+LAW_NAME_PATTERN_RE = re.compile(
+    r"[가-힣A-Za-z0-9·ㆍ()\-\s]{1,120}(?:법|시행령|시행규칙|고시|예규|훈령|지침|세칙|기준)"
+)
+ARTICLE_PATTERN_RE = re.compile(
+    r"제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*항)?(?:\s*제\s*\d+\s*호)?"
+    r"|제\s*\d+\s*항"
+    r"|제\s*\d+\s*호"
+)
+ARTICLE_WITH_CONTEXT_PATTERN_RE = re.compile(
+    r"제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*항)?(?:\s*제\s*\d+\s*호)?"
+)
+LAW_QUOTE_RE = re.compile(r"[「」『』]")
+SPACE_RE = re.compile(r"\s+")
 
 
 NO_DOCUMENT_MESSAGE = (
@@ -103,6 +127,126 @@ class RAGResponse:
   reranker_base_url: str = ""
 
 
+def _document_origin(document: Document) -> str:
+  origin = document.metadata.get("origin")
+  if origin:
+    return str(origin)
+  return "local"
+
+
+def _serialize_sources(documents: list[Document]) -> list[dict[str, str]]:
+  serialized: list[dict[str, str]] = []
+  for document in documents:
+    serialized.append(
+        {
+            "citation": str(document.metadata.get("citation", "")),
+            "source": str(document.metadata.get("source", "unknown")),
+            "page": str(document.metadata.get("page", "-")),
+            "origin": _document_origin(document),
+            "mcp_tool": str(document.metadata.get("mcp_tool", "")),
+        }
+    )
+  return serialized
+
+
+def _append_trace(trace: dict[str, object]) -> None:
+  try:
+    TRACE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with TRACE_LOG_PATH.open("a", encoding="utf-8") as handle:
+      handle.write(json.dumps(trace, ensure_ascii=False) + "\n")
+  except Exception as exc:  # pragma: no cover - tracing must not break pipeline
+    logger.warning("Failed to append MCP trace log: %s", exc)
+
+
+def _detect_forced_mcp_preflight(
+    question: str,
+) -> tuple[bool, str | None, str | None]:
+  normalized = question.strip()
+  if not normalized:
+    return False, None, None
+
+  has_law_name = bool(LAW_NAME_PATTERN_RE.search(normalized))
+  has_article = bool(ARTICLE_PATTERN_RE.search(normalized))
+
+  if has_law_name and has_article:
+    return True, "law_name_and_article_pattern", normalized
+  if has_law_name:
+    return True, "law_name_pattern", normalized
+  if has_article:
+    return True, "article_pattern", normalized
+  return False, None, None
+
+
+def _normalize_legal_question(question: str) -> str:
+  without_quotes = LAW_QUOTE_RE.sub("", question)
+  normalized = SPACE_RE.sub(" ", without_quotes).strip()
+  return normalized
+
+
+def _extract_law_title(question: str) -> str | None:
+  normalized = _normalize_legal_question(question)
+  match = LAW_NAME_PATTERN_RE.search(normalized)
+  if not match:
+    return None
+  law_title = match.group(0).strip(" ,.:;")
+  return law_title or None
+
+
+def _normalize_article_token(token: str) -> str:
+  article = SPACE_RE.sub("", token)
+  article = article.replace("의", "의")
+  article = re.sub(r"제(\d+)조", r"제\1조", article)
+  article = re.sub(r"제(\d+)항", r" 제\1항", article)
+  article = re.sub(r"제(\d+)호", r" 제\1호", article)
+  return SPACE_RE.sub(" ", article).strip()
+
+
+def _extract_article_candidates(question: str) -> tuple[str | None, str | None]:
+  normalized = _normalize_legal_question(question)
+  match = ARTICLE_WITH_CONTEXT_PATTERN_RE.search(normalized)
+  if not match:
+    fallback = ARTICLE_PATTERN_RE.search(normalized)
+    if not fallback:
+      return None, None
+    article = _normalize_article_token(fallback.group(0))
+    return article, article
+
+  full_article = _normalize_article_token(match.group(0))
+  jo_match = re.match(r"제\s*\d+\s*조(?:\s*의\s*\d+)?", full_article)
+  if not jo_match:
+    return full_article, full_article
+  return jo_match.group(0).strip(), full_article
+
+
+def _build_mcp_preflight_queries(question: str) -> list[str]:
+  normalized = _normalize_legal_question(question)
+  law_title = _extract_law_title(normalized)
+  article_jo, article_full = _extract_article_candidates(normalized)
+
+  candidates: list[str] = []
+
+  def append_candidate(value: str | None) -> None:
+    if not value:
+      return
+    normalized_value = SPACE_RE.sub(" ", value).strip(" ,.:;")
+    if not normalized_value or normalized_value in candidates:
+      return
+    candidates.append(normalized_value)
+
+  if law_title:
+    append_candidate(law_title)
+    if article_jo:
+      append_candidate(f"{law_title} {article_jo}")
+    if article_full and article_full != article_jo:
+      append_candidate(f"{law_title} {article_full}")
+  else:
+    append_candidate(normalized)
+    if article_full:
+      append_candidate(article_full)
+
+  return candidates[:3]
+
+
 class ProcurementRAGPipeline:
   def __init__(
       self,
@@ -128,36 +272,52 @@ class ProcurementRAGPipeline:
     if not normalized_question:
       raise ValueError("Question must not be empty.")
 
-    if self.document_store.get_stats()["chunk_count"] == 0:
+    mcp_enabled = self.settings.use_mcp and not self.settings.is_commercial_model()
+    document_chunk_count = self.document_store.get_stats()["chunk_count"]
+    regulation_chunk_count = self.regulations_store.get_stats()["chunk_count"]
+
+    collector = EvidenceCollector()
+    collector.init_trace(question=normalized_question, use_mcp=mcp_enabled)
+    collector.trace["document_chunk_count"] = document_chunk_count
+    collector.trace["regulation_chunk_count"] = regulation_chunk_count
+
+    if document_chunk_count == 0:
       return self._build_response(
           question=normalized_question,
           answer=NO_DOCUMENT_MESSAGE,
-          collector=EvidenceCollector(),
+          collector=collector,
       )
 
-    mcp_enabled = self.settings.use_mcp and not self.settings.is_commercial_model()
     if (
-        self.regulations_store.get_stats()["chunk_count"] == 0
+        regulation_chunk_count == 0
         and not mcp_enabled
     ):
       return self._build_response(
           question=normalized_question,
           answer=NO_REGULATION_MESSAGE,
-          collector=EvidenceCollector(),
+          collector=collector,
       )
 
-    collector = EvidenceCollector()
-    if mcp_enabled:
+    self._run_forced_mcp_preflight(
+        question=normalized_question,
+        collector=collector,
+        mcp_enabled=mcp_enabled,
+    )
+
+    forced_preflight = bool(collector.trace.get("forced_mcp_preflight"))
+
+    if mcp_enabled and not forced_preflight:
       self._gather_agent_evidence(normalized_question, collector)
 
-    if (
+    fallback_to_local = (
         not mcp_enabled
         or not collector.document_sources
         or (
-            not collector.regulation_sources
-            and self.regulations_store.get_stats()["chunk_count"] > 0
+            not collector.regulation_sources and regulation_chunk_count > 0
         )
-    ):
+    )
+    collector.record_fallback_to_local(fallback_to_local)
+    if fallback_to_local:
       retrieve_local_evidence(
           query=normalized_question,
           scope="all",
@@ -168,6 +328,7 @@ class ProcurementRAGPipeline:
           collector=collector,
           settings=self.settings,
           query_templates=get_default_query_templates(),
+          trigger="pipeline_fallback",
       )
 
     if not collector.document_sources:
@@ -177,13 +338,27 @@ class ProcurementRAGPipeline:
           collector=collector,
       )
 
+    regulations_context = self._format_context(
+        collector.regulation_sources,
+        empty_message="관련 규정 근거 없음",
+    )
+    if (
+        forced_preflight
+        and collector.trace.get("mcp_attempted")
+        and not collector.trace.get("mcp_succeeded")
+    ):
+      regulations_context = (
+          "외부 법령 MCP 조회를 시도했으나 검색되지 않아 로컬 문서 기준으로 판단했다.\n\n"
+          f"{regulations_context}"
+      )
+
+    collector.trace["final_chat_completion_calls"] = (
+        int(collector.trace.get("final_chat_completion_calls", 0)) + 1
+    )
     answer = self.answer_chain.invoke(
         {
             "question": normalized_question,
-            "regulations_context": self._format_context(
-                collector.regulation_sources,
-                empty_message="관련 규정 근거 없음",
-            ),
+            "regulations_context": regulations_context,
             "document_context": self._format_context(
                 collector.document_sources,
                 empty_message="관련 조달 문서 근거 없음",
@@ -204,6 +379,7 @@ class ProcurementRAGPipeline:
       collector: EvidenceCollector,
   ) -> None:
     if create_agent is None:
+      collector.record_agent_unavailable("create_agent unavailable")
       return
 
     tools = build_agent_tools(
@@ -214,6 +390,10 @@ class ProcurementRAGPipeline:
         settings=self.settings,
         question_context=question,
     )
+    collector.record_agent_started(
+        available_tools=[tool.name for tool in tools],
+    )
+    collector.trace["agent_loop_entered"] = True
     agent = create_agent(
         model=self.llm,
         tools=tools,
@@ -222,9 +402,61 @@ class ProcurementRAGPipeline:
 
     try:
       agent.invoke({"messages": [{"role": "user", "content": question}]})
-    except Exception:
+    except Exception as exc:
       # If tool calling is not fully supported by the runtime model, the
       # pipeline falls back to deterministic local retrieval below.
+      collector.record_agent_error(exc)
+      return
+
+  def _run_forced_mcp_preflight(
+      self,
+      *,
+      question: str,
+      collector: EvidenceCollector,
+      mcp_enabled: bool,
+  ) -> None:
+    forced, reason, query = _detect_forced_mcp_preflight(question)
+    preflight_queries = _build_mcp_preflight_queries(question) if forced else []
+    collector.trace["forced_mcp_preflight"] = forced
+    collector.trace["forced_mcp_reason"] = reason
+    collector.trace["forced_mcp_query"] = preflight_queries[0] if preflight_queries else query
+    collector.trace["forced_mcp_result_origin"] = None
+
+    if not forced or not mcp_enabled or KoreanLawMCPClient is None or not preflight_queries:
+      return
+
+    limit = max(1, min(self.settings.rerank_top_k or 5, 5))
+    client = KoreanLawMCPClient(self.settings)
+    for candidate in preflight_queries[:3]:
+      collector.record_mcp_attempt(
+          tool_name="forced_mcp_preflight",
+          search_type="law",
+          query=candidate,
+          article=None,
+          document_id=None,
+          limit=limit,
+      )
+      try:
+        documents = client.search_documents(
+            search_type="law",
+            query=candidate,
+            limit=limit,
+        )
+      except Exception as exc:
+        collector.record_mcp_error(exc)
+        logger.warning(
+            "Forced MCP preflight failed for query=%r: %s",
+            candidate,
+            exc,
+        )
+        continue
+
+      collector.record_mcp_success(documents=documents)
+      if not documents:
+        continue
+
+      collector.add_regulation_documents(documents)
+      collector.trace["forced_mcp_result_origin"] = "mcp"
       return
 
   def _build_agent_system_prompt(self) -> str:
@@ -273,6 +505,29 @@ class ProcurementRAGPipeline:
         source.metadata.get("origin") == "mcp"
         for source in collector.regulation_sources
     )
+    if collector.trace:
+      collector.trace["final_used_mcp"] = used_mcp
+      collector.trace["final_regulation_source_count"] = len(
+          collector.regulation_sources
+      )
+      collector.trace["final_document_source_count"] = len(
+          collector.document_sources
+      )
+      collector.trace["final_regulation_origins"] = sorted(
+          {_document_origin(source) for source in collector.regulation_sources}
+      )
+      collector.trace["final_document_origins"] = sorted(
+          {_document_origin(source) for source in collector.document_sources}
+      )
+      collector.trace["final_regulation_sources"] = _serialize_sources(
+          collector.regulation_sources
+      )
+      collector.trace["final_document_sources"] = _serialize_sources(
+          collector.document_sources
+      )
+      collector.trace["answer_preview"] = answer[:300]
+      _append_trace(collector.trace)
+
     return RAGResponse(
         question=question,
         answer=answer,

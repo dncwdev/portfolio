@@ -51,15 +51,21 @@ class KoreanLawMCPClient:
         document_id: str | None = None,
         limit: int = 5,
     ) -> list[Document]:
-        results = self._run_sync(
-            self._asearch_documents(
-                search_type=search_type,
-                query=query,
-                article=article,
-                document_id=document_id,
-                limit=limit,
+        try:
+            results = self._run_sync(
+                self._asearch_documents(
+                    search_type=search_type,
+                    query=query,
+                    article=article,
+                    document_id=document_id,
+                    limit=limit,
+                )
             )
-        )
+        except BaseException as exc:
+            normalized = self._unwrap_exception(exc)
+            if normalized is exc:
+                raise
+            raise normalized from exc
         return [result.to_document() for result in results]
 
     async def _asearch_documents(
@@ -125,14 +131,17 @@ class KoreanLawMCPClient:
         results: list[MCPDocumentResult] = []
 
         law_identifier = self._normalize_law_identifier(document_id)
+        derived_query, derived_article = self._normalize_law_query(query)
+        effective_query = derived_query or query
+        effective_article = article or derived_article
         if article and not query and not law_identifier:
             raise ValueError("Law article lookup requires a query or document_id.")
 
-        if query:
+        if effective_query:
             search_text = await self._call_text(
                 session,
                 "search_law",
-                {"query": query, "display": limit},
+                {"query": effective_query, "display": limit},
             )
             results.append(
                 MCPDocumentResult(
@@ -144,12 +153,12 @@ class KoreanLawMCPClient:
             if law_identifier is None:
                 law_identifier = self._extract_first_law_identifier(search_text)
 
-        if article or law_identifier is not None:
+        if effective_article or law_identifier is not None:
             arguments: dict[str, Any] = {}
             if law_identifier is not None:
                 arguments.update(law_identifier)
-            if article:
-                arguments["jo"] = article
+            if effective_article:
+                arguments["jo"] = effective_article
 
             detail_text = await self._call_text(session, "get_law_text", arguments)
             results.append(
@@ -174,6 +183,28 @@ class KoreanLawMCPClient:
             raise ValueError("Law search requires a query or document_id.")
 
         return results
+
+    @staticmethod
+    def _normalize_law_query(query: str | None) -> tuple[str | None, str | None]:
+        if not query:
+            return None, None
+
+        normalized = re.sub(r"\s+", " ", query).strip()
+        if not normalized:
+            return None, None
+
+        article_match = re.search(
+            r"(제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*항)?(?:\s*제\s*\d+\s*호)?)",
+            normalized,
+        )
+        if not article_match:
+            return normalized, None
+
+        article = re.sub(r"\s+", "", article_match.group(1))
+        law_query = normalized[: article_match.start()].strip(" ,:;")
+        if not law_query:
+            law_query = normalized
+        return law_query, article
 
     async def _search_precedent(
         self,
@@ -356,3 +387,10 @@ class KoreanLawMCPClient:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(asyncio.run, coro)
             return future.result()
+
+    @classmethod
+    def _unwrap_exception(cls, exc: BaseException) -> BaseException:
+        nested = getattr(exc, "exceptions", None)
+        if isinstance(nested, tuple) and len(nested) == 1:
+            return cls._unwrap_exception(nested[0])
+        return exc

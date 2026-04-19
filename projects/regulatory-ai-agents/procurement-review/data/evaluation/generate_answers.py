@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import APITimeoutError
 
 
@@ -21,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.agent_tools import EvidenceCollector, get_default_query_templates, retrieve_local_evidence
 from src.commercial_api import COMMERCIAL_MODELS, call_commercial_llm
-from src.config import build_embeddings, build_llm, build_reranker, get_settings
+from src.config import build_reranker, get_settings
 from src.rag_pipeline import (
     ANSWER_PROMPT,
     NO_DOCUMENT_MESSAGE,
@@ -32,6 +33,8 @@ from src.vectorstore import ProcurementVectorStore
 
 
 logger = logging.getLogger(__name__)
+MCP_REQUEST_TIMEOUT_CAP = 90.0
+MCP_CLIENT_MAX_RETRIES = 1
 
 EVAL_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = EVAL_DIR / "results"
@@ -71,6 +74,16 @@ def parse_args() -> argparse.Namespace:
             "Local model to run when --api-mode is not set. "
             "With --api-mode, this only overrides the output label."
         ),
+    )
+    parser.add_argument(
+        "--output-label",
+        default=None,
+        help="Optional output label used only for the answers JSON filename.",
+    )
+    parser.add_argument(
+        "--use-mcp",
+        action="store_true",
+        help="Enable the existing MCP agent path for local answer generation.",
     )
     parser.add_argument(
         "--limit",
@@ -114,10 +127,13 @@ def resolve_dataset_path(explicit_path: Path | None) -> Path:
 
 
 def derive_model_label(
+    output_label: str | None,
     explicit_label: str | None,
     api_mode: str | None,
     local_model_name: str,
 ) -> str:
+    if output_label:
+        return output_label
     if explicit_label and api_mode:
         return explicit_label
     if api_mode:
@@ -204,7 +220,7 @@ def run_with_retries(
 
 
 def build_vectorstores(settings: Any) -> tuple[ProcurementVectorStore, ProcurementVectorStore]:
-    embeddings = build_embeddings()
+    embeddings = build_runtime_embeddings(settings)
     document_store = ProcurementVectorStore(
         settings=settings,
         embeddings=embeddings,
@@ -216,6 +232,34 @@ def build_vectorstores(settings: Any) -> tuple[ProcurementVectorStore, Procureme
         collection_name=settings.regulations_collection_name,
     )
     return document_store, regulations_store
+
+
+def build_runtime_llm(settings: Any, model_name: str) -> ChatOpenAI:
+    client_retries = MCP_CLIENT_MAX_RETRIES if settings.use_mcp else 2
+    return ChatOpenAI(
+        model=model_name,
+        api_key=settings.llm_api_key,
+        base_url=settings.get_llm_api_base_url(model_name),
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        request_timeout=settings.request_timeout,
+        max_retries=client_retries,
+        use_responses_api=False,
+        extra_body={"include_reasoning": settings.llm_include_reasoning},
+    )
+
+
+def build_runtime_embeddings(settings: Any) -> OpenAIEmbeddings:
+    client_retries = MCP_CLIENT_MAX_RETRIES if settings.use_mcp else 2
+    return OpenAIEmbeddings(
+        model=settings.embedding_model_name,
+        api_key=settings.embedding_api_key,
+        base_url=settings.embedding_api_base_url,
+        request_timeout=settings.request_timeout,
+        max_retries=client_retries,
+        tiktoken_enabled=False,
+        check_embedding_ctx_length=False,
+    )
 
 
 def serialize_context(document: Any) -> str:
@@ -326,14 +370,22 @@ def main() -> None:
     dataset_rows = load_dataset_rows(dataset_path, limit=args.limit)
     settings = get_settings()
     local_model_name = args.model_name or settings.llm_model_name
+    request_timeout = settings.request_timeout
+    if args.use_mcp:
+        request_timeout = min(request_timeout, MCP_REQUEST_TIMEOUT_CAP)
     runtime_settings = replace(
         settings,
         llm_model_name=local_model_name,
-        # Evaluation answers are generated from the local regulations collection only.
-        use_mcp=False,
+        use_mcp=bool(args.use_mcp),
+        request_timeout=request_timeout,
     )
     reranker_key = args.reranker_key or runtime_settings.default_reranker_key
-    model_label = derive_model_label(args.model_name, args.api_mode, local_model_name)
+    model_label = derive_model_label(
+        args.output_label,
+        args.model_name,
+        args.api_mode,
+        local_model_name,
+    )
     answers_path = resolve_answers_path(model_label)
     existing_results = [] if args.overwrite else load_existing_results(answers_path)
     existing_by_question = {
@@ -349,7 +401,7 @@ def main() -> None:
             document_store=document_store,
             regulations_store=regulations_store,
             reranker=reranker,
-            llm=build_llm(local_model_name),
+            llm=build_runtime_llm(runtime_settings, local_model_name),
             settings=runtime_settings,
         )
 
@@ -409,10 +461,11 @@ def main() -> None:
                 ground_truth=ground_truth,
             )
 
+        effective_max_retries = 1 if args.use_mcp else args.max_retries
         record = run_with_retries(
             operation,
             description=f"question {index}/{total_questions}",
-            max_retries=args.max_retries,
+            max_retries=effective_max_retries,
         )
         ordered_results.append(record)
         save_results(answers_path, ordered_results)

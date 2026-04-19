@@ -1,4 +1,8 @@
+.env
+.venv/
 .chroma/
+.ipynb_checkpoints/
+logs/
 __pycache__/
 *.pyc
 data/procurement_docs/**
