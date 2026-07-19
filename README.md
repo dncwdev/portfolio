@@ -38,4 +38,4 @@ and operations.
 
 ## Links
 
-- LinkedIn (full career history): https://www.linkedin.com/in/dev-dncw-5882743a0
+- LinkedIn (full career history): [https://www.linkedin.com/in/dev-dncw-5882743a0](https://www.linkedin.com/in/yong-ku-lee-5882743a0/)
